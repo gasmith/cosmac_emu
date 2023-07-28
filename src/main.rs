@@ -10,7 +10,7 @@ fn main() -> anyhow::Result<()> {
         return Err(anyhow::anyhow!("usage: {} [bin]", args[0]));
     }
 
-    let mut mem = Memory::new(16 * 1024);
+    let mut mem = Memory::new(32 * 1024);
     let image = std::fs::read(&args[1])?;
     mem.write_image(image);
 

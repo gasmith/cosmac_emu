@@ -42,6 +42,7 @@ fn parse_hex_u16(arg: &str) -> Result<u16, std::num::ParseIntError> {
 
 pub fn run(state: &mut State) -> anyhow::Result<()> {
     let mut rl = ClapEditor::<Command>::new();
+    println!("{state}");
     loop {
         match rl.read_command() {
             None => {}
