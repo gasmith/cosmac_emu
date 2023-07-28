@@ -24,18 +24,26 @@ pub struct State {
     breakpoints: HashSet<u16>,
 }
 
+const MISC_INSTR_IMM0: [u8; 10] = [0x7c, 0x7d, 0x7f, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xff];
+
 impl std::fmt::Display for State {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let p = self.r(self.p);
-        let (imm0, imm1) = (self.m.load(p + 1), self.m.load(p + 2));
+        let rp = self.r(self.p);
+        let mrp = self.m.load(rp);
+        let (imm0, imm1) = (self.m.load(rp + 1), self.m.load(rp + 2));
+        let instr = if mrp & 0xf4 == 0xc0 {
+            format!("{mrp:02x} {imm0:02x} {imm1:02x}")
+        } else if mrp & 0xf0 == 0x30 || MISC_INSTR_IMM0.contains(&mrp) {
+            format!("{mrp:02x} {imm0:02x}")
+        } else {
+            format!("{mrp:02x}")
+        };
         write!(
             f,
-            "{c:08x} d={d:02x}.{df} in={rp:04x}:{mrp:02x} imm={imm0:02x}.{imm1:02x} x={rx:04x}:{mrx:02x}",
+            "{c:08x} d={d:02x}.{df} x={rx:04x}:{mrx:02x} in={rp:04x}:[{instr}]",
             c = self.cycle,
             d = self.d,
             df = self.df as u8,
-            rp = self.r(self.p),
-            mrp = self.load(self.p),
             rx = self.r(self.x),
             mrx = self.load(self.x),
         )
@@ -365,19 +373,12 @@ impl State {
                 if inv {
                     br = !br;
                 }
-                if skp {
-                    if !br {
-                        self.inc(self.p);
-                        self.inc(self.p);
-                    }
-                } else {
-                    if br {
-                        self.phi(self.p, imm1);
-                        self.plo(self.p, imm2);
-                    } else {
-                        self.inc(self.p);
-                        self.inc(self.p);
-                    }
+                if !br {
+                    self.inc(self.p);
+                    self.inc(self.p);
+                } else if !skp {
+                    self.phi(self.p, imm1);
+                    self.plo(self.p, imm2);
                 }
             }
             // SEP
