@@ -28,19 +28,20 @@ pub struct State {
 impl std::fmt::Display for State {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let rp = self.rp();
-        let instr = self
+        let listing = self
             .decode_instr(rp)
-            .map(|i| i.disasm())
+            .map(|i| i.listing())
             .unwrap_or("??".to_string());
         write!(
             f,
-            "{c:08x} d={d:02x}.{df} x={x:02x}:{rx:04x}:{mrx:02x} in={rp:04x} {instr}",
+            "{c:08x} d={d:02x}.{df} x={x:02x}:{rx:04x}:{mrx:02x} p={p:02x}:{rp:04x}:{listing}",
             c = self.cycle,
             d = self.d,
             df = self.df as u8,
             x = self.x,
             rx = self.r(self.x),
             mrx = self.load(self.x),
+            p = self.p,
         )
     }
 }
@@ -83,7 +84,7 @@ impl State {
 
     pub fn reset(&mut self) {
         self.cycle = 0;
-        // Registers l, N, Q are reset, lE is set and 0’s (VSS) are placed on
+        // Registers l, N, Q are reset, IE is set and 0’s (VSS) are placed on
         // the data bus.
         self.bus = 0;
         self.ie = true;
@@ -279,7 +280,7 @@ impl State {
             Instr::Resv68 => (),
             Instr::Inp(_) => self.store(self.x, 0),
             Instr::Ret => {
-                // M(R(X)) → (X, P); R(X) + 1 → R(X), 1 → lE
+                // M(R(X)) → (X, P); R(X) + 1 → R(X), 1 → IE
                 let v = self.load(self.x);
                 self.x = v >> 4;
                 self.p = v & 0x7;
@@ -287,7 +288,7 @@ impl State {
                 self.ie = true;
             }
             Instr::Dis => {
-                // M(R(X)) → (X, P); R(X) + 1 → R(X), 0 → lE
+                // M(R(X)) → (X, P); R(X) + 1 → R(X), 0 → IE
                 let v = self.load(self.x);
                 self.x = v >> 4;
                 self.p = v & 0x7;

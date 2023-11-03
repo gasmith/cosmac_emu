@@ -9,7 +9,7 @@ pub use state::{State, Status};
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
-    let mut mem = Memory::new(32 * 1024);
+    let mut mem = Memory::new(64 * 1024);
     if args.len() == 2 {
         let image = std::fs::read(&args[1])?;
         mem.write_image(image);

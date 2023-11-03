@@ -1,6 +1,7 @@
 use anyhow;
 use clap::Parser;
 use clap_repl::ClapEditor;
+use std::sync::mpsc;
 
 use crate::{InstrSchema, State, Status};
 
@@ -72,7 +73,20 @@ fn parse_hex_u8(arg: &str) -> Result<u8, std::num::ParseIntError> {
     u8::from_str_radix(arg, 16)
 }
 
+fn ctrlc_channel() -> mpsc::Receiver<()> {
+    let (tx, rx) = mpsc::sync_channel(1);
+    ctrlc::set_handler(move || {
+        if tx.try_send(()).is_err() {
+            println!("received ctrl-c twice!");
+            std::process::exit(130);
+        }
+    })
+    .expect("failed to configure ctrl-c handler");
+    rx
+}
+
 pub fn run(state: &mut State) -> anyhow::Result<()> {
+    let rx = ctrlc_channel();
     let mut rl = ClapEditor::<Command>::new();
     println!("{state}");
     loop {
@@ -84,10 +98,14 @@ pub fn run(state: &mut State) -> anyhow::Result<()> {
                     println!("{state}");
                 }
                 Command::Continue => loop {
+                    if rx.try_recv().is_ok() {
+                        println!("interrupted");
+                        break;
+                    }
                     let status = state.step();
-                    println!("{state}");
                     match status {
                         Status::Breakpoint => {
+                            println!("{state}");
                             println!("breakpoint");
                             break;
                         }
@@ -95,7 +113,7 @@ pub fn run(state: &mut State) -> anyhow::Result<()> {
                             println!("idle");
                             break;
                         }
-                        _ => {}
+                        _ => println!("{state}"),
                     }
                 },
                 Command::Display => {
