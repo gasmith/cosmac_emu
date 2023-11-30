@@ -84,7 +84,7 @@ impl State {
 
     pub fn reset(&mut self) {
         self.cycle = 0;
-        // Registers l, N, Q are reset, IE is set and 0’s (VSS) are placed on
+        // Registers I, N, Q are reset, IE is set and 0’s (VSS) are placed on
         // the data bus.
         self.bus = 0;
         self.ie = true;
@@ -275,6 +275,7 @@ impl State {
             Instr::Irx => self.inc(self.x),
             Instr::Out(n) => {
                 let v = self.load(self.x);
+                self.inc(self.x);
                 println!("OUT{}: {:02x}", n, v);
             }
             Instr::Resv68 => (),
