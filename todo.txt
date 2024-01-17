@@ -1,0 +1,12 @@
+- Add a memory map:
+  - Map ranges to flags (rw/ro)
+  - Define out-of-bound access (0x00? 0xff?)
+- Input log
+  - Sequence of (timestamp, event) pairs
+  - Timestamps:
+    - Relative, perhaps with units (ns, us, cycle)
+  - Events:
+    - Interrupt
+    - SetFlag{ flag: u8, val: u8 }
+    - Input{ port: u8, data: u8 }
+
