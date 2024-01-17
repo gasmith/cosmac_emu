@@ -429,17 +429,17 @@ impl State {
             Instr::And => self.d &= self.load(self.x),
             Instr::Xor => self.d ^= self.load(self.x),
             Instr::Add => (self.df, self.d) = add(self.d, self.load(self.x)),
-            Instr::Sd => (self.df, self.d) = sub(self.d, self.load(self.x)),
+            Instr::Sd => (self.df, self.d) = sub(self.load(self.x), self.d),
             Instr::Shr => (self.df, self.d) = (self.d & 0x01 != 0, self.d >> 1),
-            Instr::Sm => (self.df, self.d) = sub(self.load(self.x), self.d),
+            Instr::Sm => (self.df, self.d) = sub(self.d, self.load(self.x)),
             Instr::Ldi(n) => self.d = n,
             Instr::Ori(n) => self.d |= n,
             Instr::Ani(n) => self.d &= n,
             Instr::Xri(n) => self.d ^= n,
             Instr::Adi(n) => (self.df, self.d) = add(self.d, n),
-            Instr::Sdi(n) => (self.df, self.d) = sub(self.d, n),
+            Instr::Sdi(n) => (self.df, self.d) = sub(n, self.d),
             Instr::Shl => (self.df, self.d) = (self.d & 0x80 != 0, self.d << 1),
-            Instr::Smi(n) => (self.df, self.d) = sub(n, self.d),
+            Instr::Smi(n) => (self.df, self.d) = sub(self.d, n),
         }
         if self.breakpoints.contains(&self.rp()) {
             Status::Breakpoint
