@@ -2,24 +2,22 @@ use syn::{Data, DataEnum, DeriveInput, Error, Ident, Result};
 
 use crate::schema::Schema;
 
-pub enum Input<'a> {
-    Enum(Enum<'a>),
+pub enum Input {
+    Enum(Enum),
 }
 
-pub struct Enum<'a> {
-    pub original: &'a DeriveInput,
+pub struct Enum {
     pub ident: Ident,
-    pub variants: Vec<Variant<'a>>,
+    pub variants: Vec<Variant>,
 }
 
-pub struct Variant<'a> {
-    pub original: &'a syn::Variant,
+pub struct Variant {
     pub schema: Schema,
     pub ident: Ident,
 }
 
-impl<'a> Input<'a> {
-    pub fn from_syn(node: &'a DeriveInput) -> Result<Self> {
+impl Input {
+    pub fn from_syn(node: &DeriveInput) -> Result<Self> {
         match &node.data {
             Data::Enum(data) => Enum::from_syn(node, data).map(Input::Enum),
             _ => Err(Error::new_spanned(node, "only works for enums")),
@@ -27,23 +25,22 @@ impl<'a> Input<'a> {
     }
 }
 
-impl<'a> Enum<'a> {
-    fn from_syn(node: &'a DeriveInput, data: &'a DataEnum) -> Result<Self> {
+impl Enum {
+    fn from_syn(node: &DeriveInput, data: &DataEnum) -> Result<Self> {
         let variants = data
             .variants
             .iter()
             .map(Variant::from_syn)
             .collect::<Result<_>>()?;
         Ok(Enum {
-            original: node,
             ident: node.ident.clone(),
             variants,
         })
     }
 }
 
-impl<'a> Variant<'a> {
-    fn from_syn(node: &'a syn::Variant) -> Result<Self> {
+impl Variant {
+    fn from_syn(node: &syn::Variant) -> Result<Self> {
         let mut schema: Option<Schema> = None;
         for attr in &node.attrs {
             if attr.path().is_ident("schema") {
@@ -52,7 +49,6 @@ impl<'a> Variant<'a> {
         }
         let schema = schema.ok_or_else(|| Error::new_spanned(node, "missing schema"))?;
         Ok(Variant {
-            original: node,
             schema,
             ident: node.ident.clone(),
         })
