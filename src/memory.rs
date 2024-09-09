@@ -8,18 +8,17 @@ pub struct Memory {
 }
 
 impl Memory {
+    #[must_use]
     pub fn new(size: usize) -> Self {
         let rng = thread_rng();
         Self {
             size,
-            data: rng.sample_iter(Standard).take(size as usize).collect(),
+            data: rng.sample_iter(Standard).take(size).collect(),
         }
     }
 
     pub fn write_image(&mut self, image: Vec<u8>) {
-        self.data
-            .splice(0..image.len(), image.into_iter())
-            .for_each(drop);
+        self.data.splice(0..image.len(), image).for_each(drop);
     }
 
     pub fn store(&mut self, addr: u16, byte: u8) {
@@ -29,6 +28,7 @@ impl Memory {
         }
     }
 
+    #[must_use]
     pub fn load(&self, addr: u16) -> u8 {
         self.maybe_load(addr).unwrap_or(0xff)
     }

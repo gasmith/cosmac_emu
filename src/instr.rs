@@ -20,7 +20,7 @@ pub trait InstrSchema: Sized {
     }
 }
 
-#[derive(InstrSchema)]
+#[derive(Clone, Copy, InstrSchema)]
 pub enum Instr {
     #[schema("00")]
     Idl,

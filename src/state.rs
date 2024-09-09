@@ -28,16 +28,13 @@ pub struct State {
 impl std::fmt::Display for State {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let rp = self.rp();
-        let listing = self
-            .decode_instr(rp)
-            .map(|i| i.listing())
-            .unwrap_or("??".to_string());
+        let listing = self.decode_instr(rp).map_or("??".into(), |i| i.listing());
         write!(
             f,
             "{c:08x} d={d:02x}.{df} x={x:02x}:{rx:04x}:{mrx:02x} p={p:02x}:{rp:04x}:{listing}",
             c = self.cycle,
             d = self.d,
-            df = self.df as u8,
+            df = u8::from(self.df),
             x = self.x,
             rx = self.r(self.x),
             mrx = self.load(self.x),
@@ -46,26 +43,24 @@ impl std::fmt::Display for State {
     }
 }
 
-fn add(x: u8, y: u8) -> (bool, u8) {
-    let acc = x as u16 + y as u16;
-    (acc > 0xff, (acc & 0xff) as u8)
+fn add(x: u8, y: u8) -> (u8, bool) {
+    x.overflowing_add(y)
 }
 
-fn addc(x: u8, y: u8, df: bool) -> (bool, u8) {
-    let (df1, acc) = add(x, y);
-    let (df2, acc) = add(acc, df as u8);
-    (df1 || df2, acc)
+fn addc(x: u8, y: u8, df: bool) -> (u8, bool) {
+    let (acc, df1) = add(x, y);
+    let (acc, df2) = add(acc, df.into());
+    (acc, df1 || df2)
 }
 
-fn sub(x: u8, y: u8) -> (bool, u8) {
-    let acc = x as i16 - y as i16;
-    (acc >= 0, acc as u8)
+fn sub(x: u8, y: u8) -> (u8, bool) {
+    x.overflowing_sub(y)
 }
 
-fn subc(x: u8, y: u8, df: bool) -> (bool, u8) {
-    let (df1, acc) = sub(x, y);
-    let (df2, acc) = sub(acc, df as u8);
-    (df1 || df2, acc)
+fn subc(x: u8, y: u8, df: bool) -> (u8, bool) {
+    let (acc, df1) = sub(x, y);
+    let (acc, df2) = sub(acc, df.into());
+    (acc, df1 || df2)
 }
 
 impl State {
@@ -98,11 +93,11 @@ impl State {
     }
 
     fn r(&self, r: u8) -> u16 {
-        self.r[r as usize]
+        self.r[usize::from(r)]
     }
 
     fn r_mut(&mut self, r: u8) -> &mut u16 {
-        &mut self.r[r as usize]
+        &mut self.r[usize::from(r)]
     }
 
     pub fn rp(&self) -> u16 {
@@ -119,43 +114,43 @@ impl State {
 
     fn dec(&mut self, r: u8) {
         let r = self.r_mut(r);
-        *r = (*r as i32 - 1) as u16;
+        *r = (*r).overflowing_sub(1).0;
     }
 
     fn inc(&mut self, r: u8) {
         let r = self.r_mut(r);
-        *r = (*r as u32 + 1) as u16;
+        *r = (*r).overflowing_add(1).0;
     }
 
-    fn inc_by(&mut self, r: u8, n: u32) {
+    fn inc_by(&mut self, r: u8, n: u8) {
         let r = self.r_mut(r);
-        *r = (*r as u32 + n) as u16;
+        *r = (*r).overflowing_add(n.into()).0;
     }
 
     fn phi(&mut self, r: u8, v: u8) {
-        let r = &mut self.r[r as usize];
-        *r = ((v as u16) << 8) | (*r & 0x00ff);
+        let r = self.r_mut(r);
+        *r = (u16::from(v) << 8) | (*r & 0x00ff);
     }
 
     fn plo(&mut self, r: u8, v: u8) {
-        let r = &mut self.r[r as usize];
-        *r = (*r & 0xff00) | v as u16;
+        let r = self.r_mut(r);
+        *r = (*r & 0xff00) | u16::from(v);
     }
 
     fn ghi(&mut self, r: u8) -> u8 {
-        (self.r[r as usize] >> 8) as u8
+        u8::try_from(self.r(r) >> 8).unwrap()
     }
 
     fn glo(&mut self, r: u8) -> u8 {
-        (self.r[r as usize] & 0xff) as u8
+        u8::try_from(self.r(r) & 0xff).unwrap()
     }
 
     pub fn set_breakpoint(&mut self, addr: u16) {
         self.breakpoints.insert(addr);
     }
 
-    pub fn clear_breakpoint(&mut self, addr: &u16) {
-        self.breakpoints.remove(addr);
+    pub fn clear_breakpoint(&mut self, addr: u16) {
+        self.breakpoints.remove(&addr);
     }
 
     pub fn breakpoints(&self) -> &HashSet<u16> {
@@ -171,12 +166,12 @@ impl State {
     pub fn print_flags(&self) {
         println!(
             "df={df} ef={ef0}{ef1}{ef2}{ef3} q={q}",
-            df = self.df as u8,
-            ef0 = self.ef[0] as u8,
-            ef1 = self.ef[1] as u8,
-            ef2 = self.ef[2] as u8,
-            ef3 = self.ef[3] as u8,
-            q = self.q as u8,
+            df = u8::from(self.df),
+            ef0 = u8::from(self.ef[0]),
+            ef1 = u8::from(self.ef[1]),
+            ef2 = u8::from(self.ef[2]),
+            ef3 = u8::from(self.ef[3]),
+            q = u8::from(self.q),
         );
     }
 
@@ -184,7 +179,7 @@ impl State {
         println!(
             "d={d:02x}.{df} p={p:x} x={x:x} t={t:04x}",
             d = self.d,
-            df = self.df as u8,
+            df = u8::from(self.df),
             p = self.p,
             x = self.x,
             t = self.t,
@@ -192,7 +187,7 @@ impl State {
         for (n, r) in self.r.iter().enumerate() {
             print!("{n:x}={r:04x}");
             if n % 4 == 3 {
-                print!("\n");
+                println!();
             } else {
                 print!(" ");
             }
@@ -200,14 +195,7 @@ impl State {
     }
 
     pub fn decode_instr(&self, addr: u16) -> Option<Instr> {
-        Instr::decode(&self.m.as_slice(addr, 3))
-    }
-
-    pub fn decode_instr_str(&self, addr: u16) -> String {
-        match self.decode_instr(addr) {
-            Some(instr) => instr.disasm(),
-            None => "??".to_string(),
-        }
+        Instr::decode(self.m.as_slice(addr, 3))
     }
 
     pub fn step(&mut self) -> Status {
@@ -218,9 +206,10 @@ impl State {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn do_step(&mut self, instr: Instr) -> Status {
         let size = instr.size();
-        self.inc_by(self.p, size as u32);
+        self.inc_by(self.p, size);
         self.cycle += if size == 3 { 3 } else { 2 };
         match instr {
             Instr::Idl => {
@@ -276,7 +265,7 @@ impl State {
             Instr::Out(n) => {
                 let v = self.load(self.x);
                 self.inc(self.x);
-                println!("OUT{}: {:02x}", n, v);
+                println!("OUT{n}: {v:02x}");
             }
             Instr::Resv68 => (),
             Instr::Inp(_) => self.store(self.x, 0),
@@ -308,11 +297,11 @@ impl State {
             }
             Instr::Adc => {
                 // M(R(X)) + D + DF → DF, D
-                (self.df, self.d) = addc(self.load(self.x), self.d, self.df);
+                (self.d, self.df) = addc(self.load(self.x), self.d, self.df);
             }
             Instr::Sdb => {
                 // M(R(X)) - D - (Not DF) → DF, D
-                (self.df, self.d) = subc(self.load(self.x), self.d, !self.df);
+                (self.d, self.df) = subc(self.load(self.x), self.d, !self.df);
             }
             Instr::Shrc => {
                 // SHIFT D RIGHT, LSB(D) → DF, DF → MSB(D)
@@ -325,7 +314,7 @@ impl State {
             }
             Instr::Smb => {
                 // D-M(R(X))-(NOT DF) → DF, D
-                (self.df, self.d) = subc(self.d, self.load(self.x), !self.df);
+                (self.d, self.df) = subc(self.d, self.load(self.x), !self.df);
             }
             Instr::Sav => {
                 // T → M(R(X))
@@ -342,11 +331,11 @@ impl State {
             Instr::Seq => self.q = true,
             Instr::Adci(nn) => {
                 // M(R(P)) + D + DF → DF, D; R(P) + 1 → R(P)
-                (self.df, self.d) = addc(nn, self.d, self.df)
+                (self.d, self.df) = addc(nn, self.d, self.df);
             }
             Instr::Sdbi(nn) => {
                 // M(R(P)) - D - (Not DF) → DF, D; R(P) + 1 → R(P)
-                (self.df, self.d) = subc(nn, self.d, !self.df)
+                (self.d, self.df) = subc(nn, self.d, !self.df);
             }
             Instr::Shlc => {
                 // SHIFT D LEFT, MSB(D) → DF, DF → LSB(D)
@@ -359,7 +348,7 @@ impl State {
             }
             Instr::Smbi(nn) => {
                 // SMBI: D-M(R(P))-(NOT DF) → DF, D; R(P) + 1 → R(P)
-                (self.df, self.d) = subc(self.d, nn, !self.df);
+                (self.d, self.df) = subc(self.d, nn, !self.df);
                 self.inc(self.p);
             }
             Instr::Glo(n) => self.d = self.glo(n),
@@ -428,23 +417,70 @@ impl State {
             Instr::Or => self.d |= self.load(self.x),
             Instr::And => self.d &= self.load(self.x),
             Instr::Xor => self.d ^= self.load(self.x),
-            Instr::Add => (self.df, self.d) = add(self.d, self.load(self.x)),
-            Instr::Sd => (self.df, self.d) = sub(self.load(self.x), self.d),
-            Instr::Shr => (self.df, self.d) = (self.d & 0x01 != 0, self.d >> 1),
-            Instr::Sm => (self.df, self.d) = sub(self.d, self.load(self.x)),
+            Instr::Add => (self.d, self.df) = add(self.d, self.load(self.x)),
+            Instr::Sd => (self.d, self.df) = sub(self.load(self.x), self.d),
+            Instr::Shr => (self.d, self.df) = (self.d >> 1, self.d & 0x01 != 0),
+            Instr::Sm => (self.d, self.df) = sub(self.d, self.load(self.x)),
             Instr::Ldi(n) => self.d = n,
             Instr::Ori(n) => self.d |= n,
             Instr::Ani(n) => self.d &= n,
             Instr::Xri(n) => self.d ^= n,
-            Instr::Adi(n) => (self.df, self.d) = add(self.d, n),
-            Instr::Sdi(n) => (self.df, self.d) = sub(n, self.d),
-            Instr::Shl => (self.df, self.d) = (self.d & 0x80 != 0, self.d << 1),
-            Instr::Smi(n) => (self.df, self.d) = sub(self.d, n),
+            Instr::Adi(n) => (self.d, self.df) = add(self.d, n),
+            Instr::Sdi(n) => (self.d, self.df) = sub(n, self.d),
+            Instr::Shl => (self.d, self.df) = (self.d << 1, self.d & 0x80 != 0),
+            Instr::Smi(n) => (self.d, self.df) = sub(self.d, n),
         }
         if self.breakpoints.contains(&self.rp()) {
             Status::Breakpoint
         } else {
             Status::Ready
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_add() {
+        assert_eq!(add(0, 0), (0, false));
+        assert_eq!(add(0, 1), (1, false));
+        assert_eq!(add(0xfe, 1), (0xff, false));
+        assert_eq!(add(0xff, 1), (0, true));
+        assert_eq!(add(0xff, 0xff), (0xfe, true));
+    }
+
+    #[test]
+    fn test_addc() {
+        assert_eq!(addc(0, 0, false), (0, false));
+        assert_eq!(addc(0, 0, true), (1, false));
+        assert_eq!(addc(0, 1, true), (2, false));
+        assert_eq!(addc(1, 1, true), (3, false));
+        assert_eq!(addc(0xff, 0, true), (0, true));
+        assert_eq!(addc(0xff, 1, false), (0, true));
+        assert_eq!(addc(0xfe, 1, true), (0, true));
+        assert_eq!(addc(0xff, 1, true), (1, true));
+        assert_eq!(addc(0xff, 2, true), (2, true));
+    }
+
+    #[test]
+    fn test_sub() {
+        assert_eq!(sub(0, 0), (0, false));
+        assert_eq!(sub(0, 1), (0xff, true));
+        assert_eq!(sub(1, 0), (1, false));
+        assert_eq!(sub(0xff, 1), (0xfe, false));
+        assert_eq!(sub(1, 0xff), (2, true));
+    }
+
+    #[test]
+    fn test_subc() {
+        assert_eq!(subc(0, 0, false), (0, false));
+        assert_eq!(subc(1, 1, false), (0, false));
+        assert_eq!(subc(1, 0, true), (0, false));
+        assert_eq!(subc(1, 1, true), (0xff, true));
+        assert_eq!(subc(0, 0, true), (0xff, true));
+        assert_eq!(subc(0, 1, false), (0xff, true));
+        assert_eq!(subc(0, 1, true), (0xfe, true));
     }
 }

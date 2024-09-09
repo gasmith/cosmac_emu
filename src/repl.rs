@@ -1,11 +1,10 @@
-use anyhow;
 use clap::Parser;
 use clap_repl::ClapEditor;
 use std::sync::mpsc;
 
 use crate::{InstrSchema, State, Status};
 
-#[derive(Debug, Parser)]
+#[derive(Debug, Copy, Clone, Parser)]
 enum Command {
     #[command(alias = "d")]
     Display,
@@ -85,107 +84,109 @@ fn ctrlc_channel() -> mpsc::Receiver<()> {
     rx
 }
 
-pub fn run(state: &mut State) -> anyhow::Result<()> {
-    let rx = ctrlc_channel();
+pub fn run(state: &mut State) {
+    let mut rx = ctrlc_channel();
     let mut rl = ClapEditor::<Command>::new();
     println!("{state}");
     loop {
-        match rl.read_command() {
-            None => {}
-            Some(cmd) => match cmd {
-                Command::Reset => {
-                    state.reset();
+        if let Some(cmd) = rl.read_command() {
+            handle_command(state, cmd, &mut rx);
+        }
+    }
+}
+
+fn handle_command(state: &mut State, cmd: Command, rx: &mut mpsc::Receiver<()>) {
+    match cmd {
+        Command::Reset => {
+            state.reset();
+            println!("{state}");
+        }
+        Command::Continue => loop {
+            if rx.try_recv().is_ok() {
+                println!("interrupted");
+                break;
+            }
+            let status = state.step();
+            match status {
+                Status::Breakpoint => {
                     println!("{state}");
+                    println!("breakpoint");
+                    break;
                 }
-                Command::Continue => loop {
-                    if rx.try_recv().is_ok() {
-                        println!("interrupted");
-                        break;
+                Status::Idle => {
+                    println!("idle");
+                    break;
+                }
+                Status::Ready => println!("{state}"),
+            }
+        },
+        Command::Display => {
+            println!("{state}");
+        }
+        Command::List { count, addr } => {
+            let mut addr = addr.unwrap_or(state.rp());
+            for _ in 0..count {
+                let bp = if state.breakpoints().contains(&addr) {
+                    "*"
+                } else {
+                    " "
+                };
+                let (listing, size) = match state.decode_instr(addr) {
+                    Some(instr) => (instr.listing(), instr.size()),
+                    None => ("??".into(), 1),
+                };
+                println!("{addr:04x} {bp}{listing}");
+                addr += u16::from(size);
+            }
+        }
+        Command::Examine { addr, count } => {
+            let mem = state.m.as_slice(addr, count);
+            for (ii, v) in mem.iter().enumerate() {
+                if ii % 8 == 0 {
+                    if ii != 0 {
+                        println!();
                     }
-                    let status = state.step();
-                    match status {
-                        Status::Breakpoint => {
-                            println!("{state}");
-                            println!("breakpoint");
-                            break;
-                        }
-                        Status::Idle => {
-                            println!("idle");
-                            break;
-                        }
-                        _ => println!("{state}"),
-                    }
-                },
-                Command::Display => {
-                    println!("{state}");
+                    print!("{:04x}  ", addr + u16::try_from(ii).expect("16-bit"));
                 }
-                Command::List { count, addr } => {
-                    let mut addr = addr.unwrap_or(state.rp());
-                    for _ in 0..count {
-                        let bp = if state.breakpoints().contains(&addr) {
-                            "*"
-                        } else {
-                            " "
-                        };
-                        let (listing, size) = state
-                            .decode_instr(addr)
-                            .map(|instr| (instr.listing(), instr.size()))
-                            .unwrap_or(("??".to_string(), 1));
-                        println!("{addr:04x} {bp}{listing}");
-                        addr += size as u16;
-                    }
-                }
-                Command::Examine { addr, count } => {
-                    let mem = state.m.as_slice(addr, count);
-                    for (ii, v) in mem.into_iter().enumerate() {
-                        if ii % 8 == 0 {
-                            if ii != 0 {
-                                print!("\n");
-                            }
-                            print!("{:04x}  ", addr + ii as u16);
-                        }
-                        print!("{v:02x} ");
-                    }
-                    print!("\n");
-                }
-                Command::Step { count } => {
-                    for _ in 0..count {
-                        state.step();
-                        println!("{state}");
-                    }
-                }
-                Command::Registers => {
-                    state.print_registers();
-                }
-                Command::BreakpointList => {
-                    let mut bps: Vec<_> = state.breakpoints().iter().collect();
-                    bps.sort();
-                    println!("breakpoints:");
-                    for bp in bps {
-                        let listing = state
-                            .decode_instr(*bp)
-                            .map(|instr| instr.listing())
-                            .unwrap_or("??".to_string());
-                        println!("{bp:04x} *{listing}");
-                    }
-                }
-                Command::BreakpointSet { addr } => {
-                    state.set_breakpoint(addr);
-                }
-                Command::BreakpointClear { addr } => {
-                    state.clear_breakpoint(&addr);
-                }
-                Command::Flags => {
-                    state.print_flags();
-                }
-                Command::PokeFlag { flag } => {
-                    state.toggle_flag((flag - 1) as usize);
-                    state.print_flags()
-                }
-                Command::PokeMem { addr, byte } => {
-                    state.m.store(addr, byte);
-                }
-            },
-        };
+                print!("{v:02x} ");
+            }
+            println!();
+        }
+        Command::Step { count } => {
+            for _ in 0..count {
+                state.step();
+                println!("{state}");
+            }
+        }
+        Command::Registers => {
+            state.print_registers();
+        }
+        Command::BreakpointList => {
+            let mut bps: Vec<_> = state.breakpoints().iter().collect();
+            bps.sort();
+            println!("breakpoints:");
+            for bp in bps {
+                let listing = state
+                    .decode_instr(*bp)
+                    .map_or("??".into(), |instr| instr.listing());
+                println!("{bp:04x} *{listing}");
+            }
+        }
+        Command::BreakpointSet { addr } => {
+            state.set_breakpoint(addr);
+        }
+        Command::BreakpointClear { addr } => {
+            state.clear_breakpoint(addr);
+        }
+        Command::Flags => {
+            state.print_flags();
+        }
+        Command::PokeFlag { flag } => {
+            state.toggle_flag((flag - 1) as usize);
+            state.print_flags();
+        }
+        Command::PokeMem { addr, byte } => {
+            state.m.store(addr, byte);
+        }
     }
 }

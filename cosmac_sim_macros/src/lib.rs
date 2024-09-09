@@ -10,7 +10,5 @@ mod schema;
 #[proc_macro_derive(InstrSchema, attributes(schema))]
 pub fn derive_instr_schema(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    expand::derive(&input)
-        .unwrap_or_else(|err| err.to_compile_error().into())
-        .into()
+    expand::derive(&input).unwrap_or_else(|err| err.to_compile_error().into())
 }
