@@ -219,6 +219,7 @@ impl State {
             Instr::Ldn(n) => self.d = self.load(n),
             Instr::Inc(n) => self.inc(n),
             Instr::Dec(n) => self.dec(n),
+            // Branch
             Instr::Br(nn)
             | Instr::Bq(nn)
             | Instr::Bz(nn)
@@ -234,27 +235,7 @@ impl State {
             | Instr::Bn1(nn)
             | Instr::Bn2(nn)
             | Instr::Bn3(nn)
-            | Instr::Bn4(nn) => {
-                let op_lo = instr.opcode() & 0xf;
-                let inv = (op_lo & 0x8) > 0;
-                let mut br = match op_lo & 0x7 {
-                    0x0 => true,
-                    0x1 => self.q,
-                    0x2 => self.d == 0,
-                    0x3 => self.df,
-                    0x4 => self.ef[0],
-                    0x5 => self.ef[1],
-                    0x6 => self.ef[2],
-                    0x7 => self.ef[3],
-                    _ => unreachable!(),
-                };
-                if inv {
-                    br = !br;
-                }
-                if br {
-                    self.plo(self.p, nn);
-                }
-            }
+            | Instr::Bn4(nn) => self.handle_bxx(instr.opcode(), nn),
             Instr::Lda(n) => {
                 // M(R(N)) → D; R(N) + 1 → R(N)
                 self.d = self.load(n);
@@ -363,24 +344,8 @@ impl State {
             | Instr::Nlbr(hh, ll)
             | Instr::Lbnq(hh, ll)
             | Instr::Lbnz(hh, ll)
-            | Instr::Lbnf(hh, ll) => {
-                let op_lo = instr.opcode() & 0xf;
-                let inv = (op_lo & 0x8) > 0;
-                let mut br = match op_lo & 0x3 {
-                    0x0 => true,
-                    0x1 => self.q,
-                    0x2 => self.d == 0,
-                    0x3 => self.df,
-                    _ => unreachable!(),
-                };
-                if inv {
-                    br = !br;
-                }
-                if br {
-                    self.phi(self.p, hh);
-                    self.plo(self.p, ll);
-                }
-            }
+            | Instr::Lbnf(hh, ll) => self.handle_lbxx(instr.opcode(), hh, ll),
+            // Long skip
             Instr::Nop
             | Instr::Lsnq
             | Instr::Lsnz
@@ -388,29 +353,7 @@ impl State {
             | Instr::Lsie
             | Instr::Lsq
             | Instr::Lsz
-            | Instr::Lsdf => {
-                let op_lo = instr.opcode() & 0xf;
-                let inv = (op_lo & 0x8) > 0;
-                let mut skp = match op_lo & 0x3 {
-                    0x0 => {
-                        if inv {
-                            !self.ie
-                        } else {
-                            false
-                        }
-                    }
-                    0x1 => !self.q,
-                    0x2 => self.d == 1,
-                    0x3 => !self.df,
-                    _ => unreachable!(),
-                };
-                if inv {
-                    skp = !skp;
-                }
-                if skp {
-                    self.inc_by(self.p, 2);
-                }
-            }
+            | Instr::Lsdf => self.handle_lsxx(instr.opcode()),
             Instr::Sep(n) => self.p = n,
             Instr::Sex(n) => self.x = n,
             Instr::Ldx => self.d = self.load(self.x),
@@ -434,6 +377,74 @@ impl State {
             Status::Breakpoint
         } else {
             Status::Ready
+        }
+    }
+
+    /// Handles the `Bxx` family of instructions.
+    fn handle_bxx(&mut self, opcode: u8, nn: u8) {
+        let op_lo = opcode & 0xf;
+        let inv = (op_lo & 0x8) > 0;
+        let mut br = match op_lo & 0x7 {
+            0x0 => true,
+            0x1 => self.q,
+            0x2 => self.d == 0,
+            0x3 => self.df,
+            0x4 => self.ef[0],
+            0x5 => self.ef[1],
+            0x6 => self.ef[2],
+            0x7 => self.ef[3],
+            _ => unreachable!(),
+        };
+        if inv {
+            br = !br;
+        }
+        if br {
+            self.plo(self.p, nn);
+        }
+    }
+
+    /// Handles the `LBxx` family of instructions.
+    fn handle_lbxx(&mut self, opcode: u8, hh: u8, ll: u8) {
+        let op_lo = opcode & 0xf;
+        let inv = (op_lo & 0x8) > 0;
+        let mut br = match op_lo & 0x3 {
+            0x0 => true,
+            0x1 => self.q,
+            0x2 => self.d == 0,
+            0x3 => self.df,
+            _ => unreachable!(),
+        };
+        if inv {
+            br = !br;
+        }
+        if br {
+            self.phi(self.p, hh);
+            self.plo(self.p, ll);
+        }
+    }
+
+    /// Handles the `LSxx` family of instructions, including `NOP`.
+    fn handle_lsxx(&mut self, opcode: u8) {
+        let op_lo = opcode & 0xf;
+        let inv = (op_lo & 0x8) > 0;
+        let mut skp = match op_lo & 0x3 {
+            0x0 => {
+                if inv {
+                    !self.ie
+                } else {
+                    false
+                }
+            }
+            0x1 => !self.q,
+            0x2 => self.d == 1,
+            0x3 => !self.df,
+            _ => unreachable!(),
+        };
+        if inv {
+            skp = !skp;
+        }
+        if skp {
+            self.inc_by(self.p, 2);
         }
     }
 }
