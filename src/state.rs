@@ -201,13 +201,13 @@ impl State {
     pub fn step(&mut self) -> Status {
         let addr = self.rp();
         match self.decode_instr(addr) {
-            Some(instr) => self.do_step(instr),
+            Some(instr) => self.handle_instr(instr),
             None => Status::Idle,
         }
     }
 
     #[allow(clippy::too_many_lines)]
-    pub fn do_step(&mut self, instr: Instr) -> Status {
+    pub fn handle_instr(&mut self, instr: Instr) -> Status {
         let size = instr.size();
         self.inc_by(self.p, size);
         self.cycle += if size == 3 { 3 } else { 2 };
@@ -219,7 +219,6 @@ impl State {
             Instr::Ldn(n) => self.d = self.load(n),
             Instr::Inc(n) => self.inc(n),
             Instr::Dec(n) => self.dec(n),
-            // Branch
             Instr::Br(nn)
             | Instr::Bq(nn)
             | Instr::Bz(nn)
@@ -336,7 +335,6 @@ impl State {
             Instr::Ghi(n) => self.d = self.ghi(n),
             Instr::Plo(n) => self.plo(n, self.d),
             Instr::Phi(n) => self.phi(n, self.d),
-            // Long branch
             Instr::Lbr(hh, ll)
             | Instr::Lbq(hh, ll)
             | Instr::Lbz(hh, ll)
@@ -345,7 +343,6 @@ impl State {
             | Instr::Lbnq(hh, ll)
             | Instr::Lbnz(hh, ll)
             | Instr::Lbnf(hh, ll) => self.handle_lbxx(instr.opcode(), hh, ll),
-            // Long skip
             Instr::Nop
             | Instr::Lsnq
             | Instr::Lsnz

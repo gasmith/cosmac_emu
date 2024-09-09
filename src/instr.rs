@@ -1,11 +1,17 @@
 use cosmac_sim_macros::InstrSchema;
 use itertools::Itertools;
 
+/// The interface for a instruction.
 pub trait InstrSchema: Sized {
+    /// Decodes an instruction from bytes.
     fn decode(bin: &[u8]) -> Option<Self>;
+    /// Returns a string representation of the instruction.
     fn disasm(&self) -> String;
+    /// Encodes the instruction into bytes.
     fn encode(&self) -> Vec<u8>;
+    /// Returns the size of the instruction, in bytes.
     fn size(&self) -> u8;
+    /// Returns a "listing", with the encoded and disassembled instruction side-by-side.
     fn listing(&self) -> String {
         let enc = self
             .encode()
@@ -15,6 +21,7 @@ pub trait InstrSchema: Sized {
         let disasm = self.disasm();
         format!("{enc:<8} {disasm}")
     }
+    /// Returns the opcode for this instruction, including packed data.
     fn opcode(&self) -> u8 {
         self.encode()[0]
     }
@@ -68,11 +75,11 @@ pub enum Instr {
     Str(u8),
     #[schema("60")]
     Irx,
-    #[schema("6n")]
+    #[schema("6l")]
     Out(u8),
     #[schema("68")]
     Resv68,
-    #[schema("6n")]
+    #[schema("6h")]
     Inp(u8),
     #[schema("70")]
     Ret,
@@ -182,4 +189,19 @@ pub enum Instr {
     Shl,
     #[schema("ff nn")]
     Smi(u8),
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_out_inp() {
+        assert!(matches!(Instr::decode(&[0x60]), Some(Instr::Irx)));
+        assert!(matches!(Instr::decode(&[0x61]), Some(Instr::Out(1))));
+        assert!(matches!(Instr::decode(&[0x67]), Some(Instr::Out(7))));
+        assert!(matches!(Instr::decode(&[0x68]), Some(Instr::Resv68)));
+        assert!(matches!(Instr::decode(&[0x69]), Some(Instr::Inp(1))));
+        assert!(matches!(Instr::decode(&[0x6f]), Some(Instr::Inp(7))));
+    }
 }

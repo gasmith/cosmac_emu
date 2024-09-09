@@ -3,6 +3,7 @@ use quote::quote;
 use syn::{DeriveInput, Result};
 
 use crate::ast::{Enum, Input};
+use crate::schema::Packed;
 
 pub fn derive(node: &DeriveInput) -> Result<TokenStream> {
     let input = Input::from_syn(node)?;
@@ -19,10 +20,19 @@ fn impl_enum(input: Enum) -> TokenStream {
     for v in &input.variants {
         let ident = &v.ident;
         let opcode = v.schema.opcode;
-        if v.schema.packed {
-            decode_packed_arms.push(quote! {
-                #opcode => Some(Self::#ident(opcode_lo)),
-            });
+        if let Some(packed) = v.schema.packed {
+            let arm = match packed {
+                Packed::N => quote! {
+                    #opcode => Some(Self::#ident(opcode_lo)),
+                },
+                Packed::L => quote! {
+                    #opcode if opcode_lo < 8 => Some(Self::#ident(opcode_lo)),
+                },
+                Packed::H => quote! {
+                    #opcode if opcode_lo >= 8 => Some(Self::#ident(opcode_lo & 0x7)),
+                },
+            };
+            decode_packed_arms.push(arm);
         } else if v.schema.size == 1 {
             decode_plain_arms.push(quote! {
                 #opcode => Some(Self::#ident),
@@ -93,9 +103,14 @@ fn impl_enum(input: Enum) -> TokenStream {
     let encode_arms = input.variants.iter().map(|v| {
         let ident = &v.ident;
         let opcode = v.schema.opcode;
-        if v.schema.packed {
-            quote! {
-                #ty::#ident(n) => vec![#opcode | n],
+        if let Some(packed) = v.schema.packed {
+            match packed {
+                Packed::N | Packed::L => quote! {
+                    #ty::#ident(n) => vec![#opcode | n],
+                },
+                Packed::H => quote! {
+                    #ty::#ident(n) => vec![#opcode | n | 0x08],
+                },
             }
         } else if v.schema.size == 1 {
             quote! {
