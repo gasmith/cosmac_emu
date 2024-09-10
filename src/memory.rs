@@ -1,3 +1,5 @@
+use anyhow::{anyhow, Result};
+
 use rand::distributions::Standard;
 use rand::{thread_rng, Rng};
 
@@ -17,8 +19,14 @@ impl Memory {
         }
     }
 
-    pub fn write_image(&mut self, image: Vec<u8>) {
-        self.data.splice(0..image.len(), image).for_each(drop);
+    pub fn write_image(&mut self, image: Vec<u8>, base_addr: usize) -> Result<()> {
+        let end_addr = base_addr + image.len();
+        if end_addr > self.size {
+            Err(anyhow!("image extends beyond available memory"))
+        } else {
+            self.data.splice(base_addr..end_addr, image).for_each(drop);
+            Ok(())
+        }
     }
 
     pub fn store(&mut self, addr: u16, byte: u8) {

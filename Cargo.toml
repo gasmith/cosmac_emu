@@ -8,8 +8,10 @@ edition = "2021"
 [dependencies]
 cosmac_sim_macros = {path = "./cosmac_sim_macros"}
 anyhow = "1.0.72"
-clap = "4.3.19"
+clap = { version = "4.3.19", features = ["derive"] }
 clap-repl = "0.1.0"
 itertools = "0.11.0"
 rand = "0.8.5"
 ctrlc = "3.4.1"
+byte-unit = "5.1.4"
+regex = "1.10.6"

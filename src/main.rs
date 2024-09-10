@@ -1,27 +1,26 @@
 #![allow(clippy::module_name_repetitions)]
 
-use std::cmp::Ordering;
+use anyhow::Result;
+use clap::Parser;
 
+mod args;
 mod instr;
 mod memory;
 mod repl;
 mod state;
 
-use instr::{Instr, InstrSchema};
-use memory::Memory;
-use state::{State, Status};
+use self::args::Args;
+use self::instr::{Instr, InstrSchema};
+use self::memory::Memory;
+use self::state::{State, Status};
 
-fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
+fn main() -> Result<()> {
+    let args: Args = Args::parse();
 
-    let mut mem = Memory::new(64 * 1024);
-    match args.len().cmp(&2) {
-        Ordering::Greater => return Err(anyhow::anyhow!("usage: {} [bin]", args[0])),
-        Ordering::Equal => {
-            let image = std::fs::read(&args[1])?;
-            mem.write_image(image);
-        }
-        Ordering::Less => (),
+    let mut mem = Memory::new(args.memory_size);
+    for image in args.image {
+        let bin = std::fs::read(image.path)?;
+        mem.write_image(bin, image.base_addr.into())?;
     }
 
     let mut state = State::new(mem);
