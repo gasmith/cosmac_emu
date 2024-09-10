@@ -1,8 +1,10 @@
 use clap::Parser;
 use clap_repl::ClapEditor;
+use itertools::Itertools;
 use std::sync::mpsc;
 
-use crate::{InstrSchema, State, Status};
+use crate::controller::{Controller, Status};
+use crate::instr::InstrSchema;
 
 #[derive(Debug, Copy, Clone, Parser)]
 enum Command {
@@ -84,32 +86,32 @@ fn ctrlc_channel() -> mpsc::Receiver<()> {
     rx
 }
 
-pub fn run(state: &mut State) {
+pub fn run(controller: &mut Controller) {
     let mut rx = ctrlc_channel();
     let mut rl = ClapEditor::<Command>::new();
-    println!("{state}");
+    controller.print_state();
     loop {
         if let Some(cmd) = rl.read_command() {
-            handle_command(state, cmd, &mut rx);
+            handle_command(controller, cmd, &mut rx);
         }
     }
 }
 
-fn handle_command(state: &mut State, cmd: Command, rx: &mut mpsc::Receiver<()>) {
+fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Receiver<()>) {
     match cmd {
         Command::Reset => {
-            state.reset();
-            println!("{state}");
+            controller.reset();
+            controller.print_state();
         }
         Command::Continue => loop {
             if rx.try_recv().is_ok() {
                 println!("interrupted");
                 break;
             }
-            let status = state.step();
+            let status = controller.step();
             match status {
                 Status::Breakpoint => {
-                    println!("{state}");
+                    controller.print_state();
                     println!("breakpoint");
                     break;
                 }
@@ -117,30 +119,32 @@ fn handle_command(state: &mut State, cmd: Command, rx: &mut mpsc::Receiver<()>) 
                     println!("idle");
                     break;
                 }
-                Status::Ready => println!("{state}"),
+                Status::Ready => {
+                    controller.print_state();
+                }
             }
         },
         Command::Display => {
-            println!("{state}");
+            controller.print_state();
         }
         Command::List { count, addr } => {
-            let mut addr = addr.unwrap_or(state.rp());
+            let mut addr = addr.unwrap_or(controller.state().rp());
             for _ in 0..count {
-                let bp = if state.breakpoints().contains(&addr) {
+                let bp = if controller.has_breakpoint(addr) {
                     "*"
                 } else {
                     " "
                 };
-                let (listing, size) = match state.decode_instr(addr) {
-                    Some(instr) => (instr.listing(), instr.size()),
-                    None => ("??".into(), 1),
-                };
+                let (listing, size) = controller
+                    .state()
+                    .decode_instr(addr)
+                    .map_or(("??".into(), 1), |i| (i.listing(), i.size()));
                 println!("{addr:04x} {bp}{listing}");
                 addr += u16::from(size);
             }
         }
         Command::Examine { addr, count } => {
-            let mem = state.m.as_slice(addr, count);
+            let mem = controller.state().m.as_slice(addr, count);
             for (ii, v) in mem.iter().enumerate() {
                 if ii % 8 == 0 {
                     if ii != 0 {
@@ -154,39 +158,40 @@ fn handle_command(state: &mut State, cmd: Command, rx: &mut mpsc::Receiver<()>) 
         }
         Command::Step { count } => {
             for _ in 0..count {
-                state.step();
-                println!("{state}");
+                controller.step();
+                controller.print_state();
             }
         }
         Command::Registers => {
-            state.print_registers();
+            controller.state().print_registers();
         }
         Command::BreakpointList => {
-            let mut bps: Vec<_> = state.breakpoints().iter().collect();
-            bps.sort();
+            let bps: Vec<_> = controller.breakpoints().iter().sorted_unstable().collect();
             println!("breakpoints:");
             for bp in bps {
-                let listing = state
+                let listing = controller
+                    .state()
                     .decode_instr(*bp)
                     .map_or("??".into(), |instr| instr.listing());
                 println!("{bp:04x} *{listing}");
             }
         }
         Command::BreakpointSet { addr } => {
-            state.set_breakpoint(addr);
+            controller.breakpoints_mut().insert(addr);
         }
         Command::BreakpointClear { addr } => {
-            state.clear_breakpoint(addr);
+            controller.breakpoints_mut().remove(&addr);
         }
         Command::Flags => {
-            state.print_flags();
+            controller.state().print_flags();
         }
         Command::PokeFlag { flag } => {
-            state.toggle_flag((flag - 1) as usize);
+            let state = controller.state_mut();
+            state.toggle_flag(flag);
             state.print_flags();
         }
         Command::PokeMem { addr, byte } => {
-            state.m.store(addr, byte);
+            controller.state_mut().m.store(addr, byte);
         }
     }
 }

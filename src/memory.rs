@@ -3,10 +3,24 @@ use anyhow::{anyhow, Result};
 use rand::distributions::Standard;
 use rand::{thread_rng, Rng};
 
+use crate::args::Args;
+
 #[derive(Default)]
 pub struct Memory {
     size: usize,
     data: Vec<u8>,
+}
+impl<'a> TryFrom<&'a Args> for Memory {
+    type Error = anyhow::Error;
+
+    fn try_from(args: &'a Args) -> Result<Self, Self::Error> {
+        let mut mem = Memory::new(args.memory_size);
+        for image in &args.image {
+            let bin = std::fs::read(&image.path)?;
+            mem.write_image(bin, image.base_addr.into())?;
+        }
+        Ok(mem)
+    }
 }
 
 impl Memory {

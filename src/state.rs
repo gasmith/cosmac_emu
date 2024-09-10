@@ -1,28 +1,59 @@
-use crate::{Instr, InstrSchema, Memory};
 use rand::{thread_rng, Rng};
-use std::collections::HashSet;
 
-pub enum Status {
-    Ready,
-    Idle,
-    Breakpoint,
-}
+use crate::event::{Event, Flag, Port};
+use crate::instr::{Instr, InstrSchema};
+use crate::memory::Memory;
 
 #[derive(Default)]
 pub struct State {
-    cycle: u64,
-    bus: u8,
-    d: u8,
-    df: bool,
-    ie: bool,
+    /// Memory image.
     pub m: Memory,
-    p: u8,
-    q: bool,
-    r: [u16; 16],
-    t: u8,
-    x: u8,
+    /// Number of machine cycles since last reset.
+    cycle: u64,
+    /// Accumulator register.
+    d: u8,
+    /// ALU carry flag.
+    df: bool,
+    /// External flags.
     ef: [bool; 4],
-    breakpoints: HashSet<u16>,
+    /// Interrupt enable flag.
+    ie: bool,
+    /// Input data bus.
+    inp: [u8; 7],
+    /// Interrupt line.
+    int: bool,
+    /// Output data bus.
+    out: [u8; 7],
+    /// Program register select (4-bit).
+    p: u8,
+    /// Output flip-flop.
+    q: bool,
+    /// General purpose registers.
+    r: [u16; 16],
+    /// Interrupt context (packed X and P).
+    t: u8,
+    /// Data register select (4-bit).
+    x: u8,
+}
+
+impl std::fmt::Debug for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("State")
+            .field("cycle", &self.cycle)
+            .field("d", &self.d)
+            .field("df", &self.df)
+            .field("ef", &self.ef)
+            .field("ie", &self.ie)
+            .field("inp", &self.inp)
+            .field("int", &self.int)
+            .field("out", &self.out)
+            .field("p", &self.p)
+            .field("q", &self.q)
+            .field("r", &self.r)
+            .field("t", &self.t)
+            .field("x", &self.x)
+            .finish()
+    }
 }
 
 impl std::fmt::Display for State {
@@ -74,22 +105,43 @@ impl State {
         };
         rng.fill(&mut state.r);
         rng.fill(&mut state.ef);
+        state.reset();
         state
     }
 
     pub fn reset(&mut self) {
-        self.cycle = 0;
-        // Registers I, N, Q are reset, IE is set and 0’s (VSS) are placed on
-        // the data bus.
-        self.bus = 0;
+        // From the CDP1802 datasheet:
+        //
+        //  "Registers I, N, Q are reset, IE is set and 0’s (VSS) are placed on the data bus. The
+        //   first machine cycle after termination of reset is an initialization cycle which requires
+        //   9 clock pulses. During this cycle the CPU remains in S1 and register X, P, and R(0) are
+        //   reset."
+        //
+        // Note that registers I & N are latches for the instruction opcode's high and low bits,
+        // respectively.
         self.ie = true;
         self.q = false;
-        // The first machine cycle after termination of reset is an
-        // initialization cycle which requires 9 clock pulses. During this cycle
-        // the CPU remains in S1 and register X, P, and R(0) are reset.
         self.x = 0;
         self.p = 0;
         self.r[0] = 0;
+
+        // Reset external flags and I/O ports.
+        self.int = false;
+        for i in 0..4 {
+            self.ef[i] = false;
+        }
+        for i in 0..7 {
+            self.out[i] = 0;
+            self.inp[i] = 0;
+        }
+
+        // Reset cycle count.
+        self.cycle = 0;
+    }
+
+    /// Returns the number of machine cycles since the last reset.
+    pub fn cycle(&self) -> u64 {
+        self.cycle
     }
 
     fn r(&self, r: u8) -> u16 {
@@ -100,6 +152,7 @@ impl State {
         &mut self.r[usize::from(r)]
     }
 
+    /// Returns the current instruction pointer.
     pub fn rp(&self) -> u16 {
         self.r(self.p)
     }
@@ -145,36 +198,30 @@ impl State {
         u8::try_from(self.r(r) & 0xff).unwrap()
     }
 
-    pub fn set_breakpoint(&mut self, addr: u16) {
-        self.breakpoints.insert(addr);
-    }
-
-    pub fn clear_breakpoint(&mut self, addr: u16) {
-        self.breakpoints.remove(&addr);
-    }
-
-    pub fn breakpoints(&self) -> &HashSet<u16> {
-        &self.breakpoints
-    }
-
-    pub fn toggle_flag(&mut self, n: usize) {
-        if n < self.ef.len() {
-            self.ef[n] = !self.ef[n];
+    /// Toggles the value of an external flag.
+    pub fn toggle_flag(&mut self, flag: u8) {
+        if flag > 0 && flag <= 4 {
+            let index = usize::from(flag - 1);
+            self.ef[index] = !self.ef[index];
         }
     }
 
+    /// Prints flags to stdout.
     pub fn print_flags(&self) {
         println!(
-            "df={df} ef={ef0}{ef1}{ef2}{ef3} q={q}",
+            "df={df} ef={ef0}{ef1}{ef2}{ef3} ie={ie} int={int} q={q}",
             df = u8::from(self.df),
             ef0 = u8::from(self.ef[0]),
             ef1 = u8::from(self.ef[1]),
             ef2 = u8::from(self.ef[2]),
             ef3 = u8::from(self.ef[3]),
+            ie = u8::from(self.ie),
+            int = u8::from(self.int),
             q = u8::from(self.q),
         );
     }
 
+    /// Prints registers to stdout.
     pub fn print_registers(&self) {
         println!(
             "d={d:02x}.{df} p={p:x} x={x:x} t={t:04x}",
@@ -198,24 +245,41 @@ impl State {
         Instr::decode(self.m.as_slice(addr, 3))
     }
 
-    pub fn step(&mut self) -> Status {
-        let addr = self.rp();
-        match self.decode_instr(addr) {
-            Some(instr) => self.handle_instr(instr),
-            None => Status::Idle,
+    fn decode_rp(&self) -> Option<Instr> {
+        self.decode_instr(self.rp())
+    }
+
+    /// Advances the state machine.
+    pub fn step(&mut self) {
+        if self.ie && self.int {
+            self.handle_interrupt();
+        } else if let Some(instr) = self.decode_rp() {
+            self.handle_instr(instr);
         }
     }
 
+    /// Returns true if the current instruction is IDL.
+    pub fn is_idle(&self) -> bool {
+        matches!(self.decode_rp(), None | Some(Instr::Idl))
+    }
+
+    /// Handles an interrupt.
+    fn handle_interrupt(&mut self) {
+        self.t = (self.x << 4) | self.p;
+        self.p = 1;
+        self.x = 2;
+        self.ie = false;
+        self.cycle += 1;
+    }
+
+    /// Runs the next instruction.
     #[allow(clippy::too_many_lines)]
-    pub fn handle_instr(&mut self, instr: Instr) -> Status {
+    fn handle_instr(&mut self, instr: Instr) {
         let size = instr.size();
         self.inc_by(self.p, size);
         self.cycle += if size == 3 { 3 } else { 2 };
         match instr {
-            Instr::Idl => {
-                self.dec(self.p);
-                return Status::Idle;
-            }
+            Instr::Idl => self.dec(self.p),
             Instr::Ldn(n) => self.d = self.load(n),
             Instr::Inc(n) => self.inc(n),
             Instr::Dec(n) => self.dec(n),
@@ -243,12 +307,17 @@ impl State {
             Instr::Str(n) => self.store(n, self.d),
             Instr::Irx => self.inc(self.x),
             Instr::Out(n) => {
+                assert!(n > 0 && n <= 7);
                 let v = self.load(self.x);
-                self.inc(self.x);
+                self.out[usize::from(n - 1)] = v;
                 println!("OUT{n}: {v:02x}");
+                self.inc(self.x);
             }
             Instr::Resv68 => (),
-            Instr::Inp(_) => self.store(self.x, 0),
+            Instr::Inp(n) => {
+                assert!(n > 0 && n <= 7);
+                self.store(self.x, self.inp[usize::from(n - 1)])
+            }
             Instr::Ret => {
                 // M(R(X)) → (X, P); R(X) + 1 → R(X), 1 → IE
                 let v = self.load(self.x);
@@ -370,11 +439,6 @@ impl State {
             Instr::Shl => (self.d, self.df) = (self.d << 1, self.d & 0x80 != 0),
             Instr::Smi(n) => (self.d, self.df) = sub(self.d, n),
         }
-        if self.breakpoints.contains(&self.rp()) {
-            Status::Breakpoint
-        } else {
-            Status::Ready
-        }
     }
 
     /// Handles the `Bxx` family of instructions.
@@ -442,6 +506,34 @@ impl State {
         }
         if skp {
             self.inc_by(self.p, 2);
+        }
+    }
+
+    /// Applies an external event.
+    pub fn apply_event(&mut self, event: Event) {
+        match event {
+            Event::Interrupt => self.int = true,
+            Event::Flag { flag, value } => {
+                let index = match flag {
+                    Flag::EF1 => 0,
+                    Flag::EF2 => 1,
+                    Flag::EF3 => 2,
+                    Flag::EF4 => 3,
+                };
+                self.ef[index] = value;
+            }
+            Event::Input { port, value } => {
+                let index = match port {
+                    Port::IO1 => 0,
+                    Port::IO2 => 1,
+                    Port::IO3 => 2,
+                    Port::IO4 => 3,
+                    Port::IO5 => 4,
+                    Port::IO6 => 6,
+                    Port::IO7 => 7,
+                };
+                self.inp[index] = value;
+            }
         }
     }
 }

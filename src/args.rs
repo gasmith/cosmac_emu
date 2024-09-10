@@ -20,6 +20,10 @@ pub struct Args {
     /// The size of addressable memory attached to the 1802. Cannot exceed 64KiB.
     #[arg(short, long, value_parser=parse_bytes, default_value="64KiB")]
     pub memory_size: usize,
+
+    /// An event log to replay during program execution.
+    #[arg(short, long)]
+    pub event_log: Option<PathBuf>,
 }
 
 /// An image to be loaded at the specified base address.
