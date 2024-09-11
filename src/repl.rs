@@ -116,9 +116,11 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
                     break;
                 }
                 Status::Idle => {
+                    controller.print_state();
                     println!("idle");
                     break;
                 }
+                Status::Event => (),
                 Status::Ready => {
                     controller.print_state();
                 }

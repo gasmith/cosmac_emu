@@ -11,6 +11,7 @@ use crate::state::State;
 #[derive(Debug, Clone, Copy, Hash)]
 pub enum Status {
     Idle,
+    Event,
     Ready,
     Breakpoint,
 }
@@ -79,17 +80,18 @@ impl Controller {
     pub fn step(&mut self) -> Status {
         let time = self.cycle_time * u32::try_from(self.state.cycle()).unwrap_or(u32::MAX);
         if let Some(e) = self.events.pop_next_at(time) {
-            println!("injecting {e:?}");
+            println!("event -> {e:?}");
             self.state.apply_event(e);
+            Status::Event
         } else {
             self.state.step();
-        }
-        if self.state.is_idle() {
-            Status::Idle
-        } else if self.has_breakpoint(self.state.rp()) {
-            Status::Breakpoint
-        } else {
-            Status::Ready
+            if self.state.is_idle() {
+                Status::Idle
+            } else if self.has_breakpoint(self.state.rp()) {
+                Status::Breakpoint
+            } else {
+                Status::Ready
+            }
         }
     }
 }
