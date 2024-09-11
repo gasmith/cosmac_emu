@@ -1,9 +1,18 @@
-use clap::Parser;
-use clap_repl::ClapEditor;
-use itertools::Itertools;
+use std::fmt::Display;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
+
+use anyhow::anyhow;
+use clap::Parser;
+use clap_repl::ClapEditor;
+use itertools::Itertools;
+use nom::branch::alt;
+use nom::bytes::complete::tag;
+use nom::character::complete::one_of;
+use nom::combinator::{all_consuming, map, map_res, rest};
+use nom::sequence::pair;
+use nom::IResult;
 
 use crate::controller::{Controller, Status};
 use crate::event::Event;
@@ -64,18 +73,19 @@ enum Command {
     /// Adds a single event.
     #[command(alias = "e")]
     EventAdd {
-        /// The event, in lst form:
+        /// The event, in lst form.
         ///
-        ///    int
-        ///    flag,ef[1-4],[01]
-        ///    input,io[1-7],0x[0-1a-f]
-        #[arg(value_parser=Event::from_lst_str)]
+        /// Examples:
+        ///  - int
+        ///  - flag,ef[1-4],[01]
+        ///  - input,io[1-7],0x[0-1a-f]
+        #[arg(value_parser=Event::from_lst_str, verbatim_doc_comment)]
         event: Event,
 
         /// The offset from the start of execution, in nanoseconds. If not specified, defaults to
         /// "now", i.e. nanoseconds since the last reset.
-        #[arg(value_parser=parse_duration::parse)]
-        when: Option<Duration>,
+        #[arg(value_parser=When::parse, default_value_t=When::Now)]
+        when: When,
     },
     /// Adds events from the specified log file.
     #[command(alias = "ee")]
@@ -86,8 +96,8 @@ enum Command {
 
         /// The offset from the start of execution, in nanoseconds. If not specified, defaults to
         /// "now", i.e. nanoseconds since the last reset.
-        #[arg(value_parser=parse_duration::parse)]
-        when: Option<Duration>,
+        #[arg(value_parser=When::parse, default_value_t=When::Now)]
+        when: When,
     },
     /// Lists events.
     #[command(alias = "el")]
@@ -95,6 +105,59 @@ enum Command {
     /// Clears all events.
     #[command(alias = "ec")]
     EventClear,
+}
+
+#[derive(Debug, Clone, Default)]
+pub enum When {
+    #[default]
+    Now,
+    Absolute(Duration),
+    Future(Duration),
+    Past(Duration),
+}
+impl Display for When {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            When::Now => f.write_str("now"),
+            When::Absolute(d) => write!(f, "@{d:?}"),
+            When::Future(d) => write!(f, "+{d:?}"),
+            When::Past(d) => write!(f, "-{d:?}"),
+        }
+    }
+}
+impl When {
+    fn parse_partial(s: &str) -> IResult<&str, Self> {
+        alt((
+            map(tag("now"), |_| When::Now),
+            map(
+                pair(
+                    one_of("@+-"),
+                    map_res(rest, |s: &str| parse_duration::parse(s)),
+                ),
+                |(t, d)| match t {
+                    '@' => When::Absolute(d),
+                    '+' => When::Future(d),
+                    '-' => When::Past(d),
+                    _ => unreachable!(),
+                },
+            ),
+        ))(s)
+    }
+
+    fn parse(s: &str) -> anyhow::Result<Self> {
+        all_consuming(When::parse_partial)(s)
+            .map_err(|e| anyhow!("{e}"))
+            .map(|x| x.1)
+    }
+
+    fn into_absolute(self, now: Duration) -> Duration {
+        match self {
+            When::Now => now,
+            When::Absolute(d) => d,
+            When::Future(d) => now.saturating_add(d),
+            When::Past(d) => now.saturating_sub(d),
+        }
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -232,9 +295,13 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
         Command::PokeMem { addr, byte } => {
             controller.state_mut().m.store(addr, byte);
         }
-        Command::EventAdd { event, when } => controller.add_event(event, when),
+        Command::EventAdd { event, when } => {
+            let offset = when.into_absolute(controller.now());
+            controller.add_event(event, offset);
+        }
         Command::EventExtend { path, when } => {
-            if let Err(e) = controller.extend_events(path, when) {
+            let offset = when.into_absolute(controller.now());
+            if let Err(e) = controller.extend_events(path, offset) {
                 eprintln!("{e}");
             }
         }

@@ -81,19 +81,19 @@ impl Controller {
         self.cycle_time * u32::try_from(cycle).unwrap_or(u32::MAX)
     }
 
-    pub fn add_event(&mut self, event: Event, offset: Option<Duration>) {
+    pub fn add_event(&mut self, event: Event, offset: Duration) {
         let now = self.now();
-        self.events.add(event, offset.unwrap_or(now), now);
+        self.events.add(event, offset, now);
     }
 
     pub fn extend_events<P: AsRef<Path>>(
         &mut self,
         path: P,
-        offset: Option<Duration>,
+        offset: Duration,
     ) -> anyhow::Result<()> {
         let log = RawEventLog::from_file(path)?;
         let now = self.now();
-        self.events.extend(log, offset.unwrap_or(now), now);
+        self.events.extend(log, offset, now);
         Ok(())
     }
 
