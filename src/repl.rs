@@ -1,12 +1,15 @@
 use clap::Parser;
 use clap_repl::ClapEditor;
 use itertools::Itertools;
+use std::path::PathBuf;
 use std::sync::mpsc;
+use std::time::Duration;
 
 use crate::controller::{Controller, Status};
+use crate::event::Event;
 use crate::instr::InstrSchema;
 
-#[derive(Debug, Copy, Clone, Parser)]
+#[derive(Debug, Clone, Parser)]
 enum Command {
     #[command(alias = "d")]
     Display,
@@ -58,6 +61,40 @@ enum Command {
     },
     #[command(alias = "z")]
     Reset,
+    /// Adds a single event.
+    #[command(alias = "e")]
+    EventAdd {
+        /// The event, in lst form:
+        ///
+        ///    int
+        ///    flag,ef[1-4],[01]
+        ///    input,io[1-7],0x[0-1a-f]
+        #[arg(value_parser=Event::from_lst_str)]
+        event: Event,
+
+        /// The offset from the start of execution, in nanoseconds. If not specified, defaults to
+        /// "now", i.e. nanoseconds since the last reset.
+        #[arg(value_parser=parse_duration::parse)]
+        when: Option<Duration>,
+    },
+    /// Adds events from the specified log file.
+    #[command(alias = "ee")]
+    EventExtend {
+        /// Path to the event log file.
+        #[arg()]
+        path: PathBuf,
+
+        /// The offset from the start of execution, in nanoseconds. If not specified, defaults to
+        /// "now", i.e. nanoseconds since the last reset.
+        #[arg(value_parser=parse_duration::parse)]
+        when: Option<Duration>,
+    },
+    /// Lists events.
+    #[command(alias = "el")]
+    EventList,
+    /// Clears all events.
+    #[command(alias = "ec")]
+    EventClear,
 }
 
 #[derive(Debug, Parser)]
@@ -89,7 +126,7 @@ fn ctrlc_channel() -> mpsc::Receiver<()> {
 pub fn run(controller: &mut Controller) {
     let mut rx = ctrlc_channel();
     let mut rl = ClapEditor::<Command>::new();
-    controller.print_state();
+    controller.print_next();
     loop {
         if let Some(cmd) = rl.read_command() {
             handle_command(controller, cmd, &mut rx);
@@ -101,7 +138,7 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
     match cmd {
         Command::Reset => {
             controller.reset();
-            controller.print_state();
+            controller.print_next();
         }
         Command::Continue => loop {
             if rx.try_recv().is_ok() {
@@ -111,23 +148,23 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
             let status = controller.step();
             match status {
                 Status::Breakpoint => {
-                    controller.print_state();
+                    controller.print_next();
                     println!("breakpoint");
                     break;
                 }
                 Status::Idle => {
-                    controller.print_state();
+                    controller.print_next();
                     println!("idle");
                     break;
                 }
                 Status::Event => (),
                 Status::Ready => {
-                    controller.print_state();
+                    controller.print_next();
                 }
             }
         },
         Command::Display => {
-            controller.print_state();
+            println!("{}", controller.state())
         }
         Command::List { count, addr } => {
             let mut addr = addr.unwrap_or(controller.state().rp());
@@ -161,7 +198,7 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
         Command::Step { count } => {
             for _ in 0..count {
                 controller.step();
-                controller.print_state();
+                controller.print_next();
             }
         }
         Command::Registers => {
@@ -195,5 +232,13 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
         Command::PokeMem { addr, byte } => {
             controller.state_mut().m.store(addr, byte);
         }
+        Command::EventAdd { event, when } => controller.add_event(event, when),
+        Command::EventExtend { path, when } => {
+            if let Err(e) = controller.extend_events(path, when) {
+                eprintln!("{e}");
+            }
+        }
+        Command::EventList => controller.print_events(),
+        Command::EventClear => controller.events_mut().clear(),
     }
 }

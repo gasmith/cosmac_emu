@@ -2,19 +2,19 @@
 
 use core::time::Duration;
 use std::{
-    collections::VecDeque,
+    cmp::Ordering,
+    collections::BinaryHeap,
     fs::File,
     io::{BufRead, BufReader, Read},
     path::Path,
 };
 
 use anyhow::{anyhow, Result};
-use itertools::Itertools;
 use nom::{
     branch::alt,
     bytes::complete::tag,
     character::complete::{digit1, one_of},
-    combinator::{all_consuming, recognize},
+    combinator::{all_consuming, map_res, recognize},
     multi::many_m_n,
     sequence::{preceded, separated_pair},
     IResult,
@@ -24,7 +24,7 @@ use serde::Deserialize;
 use crate::args::Args;
 
 /// An external flag.
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum Flag {
     EF1,
     EF2,
@@ -33,7 +33,7 @@ pub enum Flag {
 }
 
 /// I/O ports.
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum Port {
     IO1,
     IO2,
@@ -45,7 +45,7 @@ pub enum Port {
 }
 
 /// An event.
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum Event {
     /// Raise interrupt line for one instruction cycle.
     Interrupt,
@@ -54,10 +54,67 @@ pub enum Event {
     /// Set the data bus payload for the specified port.
     Input { port: Port, value: u8 },
 }
+impl Event {
+    fn parse_lst_event(s: &str) -> IResult<&str, Event> {
+        let (s, event_type) = alt((tag("int"), tag("flag"), tag("input")))(s)?;
+        let (s, event) = match event_type {
+            "int" => (s, Event::Interrupt),
+            "flag" => {
+                let (s, flag) = map_res(preceded(tag(",ef"), one_of("1234")), |c: char| {
+                    Ok::<Flag, anyhow::Error>(match c {
+                        '1' => Flag::EF1,
+                        '2' => Flag::EF2,
+                        '3' => Flag::EF3,
+                        '4' => Flag::EF4,
+                        _ => unreachable!(),
+                    })
+                })(s)?;
+                let (s, value) = map_res(preceded(tag(","), one_of("01")), |c: char| {
+                    Ok::<bool, anyhow::Error>(match c {
+                        '0' => false,
+                        '1' => true,
+                        _ => unreachable!(),
+                    })
+                })(s)?;
+                (s, Event::Flag { flag, value })
+            }
+            "input" => {
+                let (s, port) = map_res(preceded(tag(",io"), one_of("1234567")), |c: char| {
+                    Ok::<Port, anyhow::Error>(match c {
+                        '1' => Port::IO1,
+                        '2' => Port::IO2,
+                        '3' => Port::IO3,
+                        '4' => Port::IO4,
+                        '5' => Port::IO5,
+                        '6' => Port::IO6,
+                        '7' => Port::IO7,
+                        _ => unreachable!(),
+                    })
+                })(s)?;
+                let (s, value) = map_res(
+                    preceded(
+                        tag(",0x"),
+                        recognize(many_m_n(1, 2, one_of("0123456789abcdef"))),
+                    ),
+                    |s: &str| u8::from_str_radix(s, 16),
+                )(s)?;
+                (s, Event::Input { port, value })
+            }
+            _ => unreachable!(),
+        };
+        Ok((s, event))
+    }
+
+    pub fn from_lst_str(s: &str) -> Result<Self> {
+        let (_, event) =
+            all_consuming(Self::parse_lst_event)(s).map_err(|e| anyhow!("failed to parse: {e}"))?;
+        Ok(event)
+    }
+}
 
 /// A raw deserialized timed event.
 #[derive(Debug, Clone, Deserialize)]
-struct RawTimedEvent {
+pub struct RawTimedEvent {
     /// The relative time at which this event fires, in nanoseconds.
     time: u64,
 
@@ -66,62 +123,12 @@ struct RawTimedEvent {
 }
 
 impl RawTimedEvent {
-    fn parse_time(s: &str) -> IResult<&str, u64> {
-        let (s, time) = digit1(s)?;
-        let time = time.parse().unwrap();
-        Ok((s, time))
-    }
-
-    fn parse_event(s: &str) -> IResult<&str, Event> {
-        let (s, event_type) = alt((tag("int"), tag("flag"), tag("input")))(s)?;
-        let (s, event) = match event_type {
-            "int" => (s, Event::Interrupt),
-            "flag" => {
-                let (s, n) = preceded(tag(",ef"), one_of("1234"))(s)?;
-                let flag = match n {
-                    '1' => Flag::EF1,
-                    '2' => Flag::EF2,
-                    '3' => Flag::EF3,
-                    '4' => Flag::EF4,
-                    _ => unreachable!(),
-                };
-                let (s, v) = preceded(tag(","), one_of("01"))(s)?;
-                let value = match v {
-                    '0' => false,
-                    '1' => true,
-                    _ => unreachable!(),
-                };
-                (s, Event::Flag { flag, value })
-            }
-            "input" => {
-                let (s, n) = preceded(tag(",io"), one_of("1234567"))(s)?;
-                let port = match n {
-                    '1' => Port::IO1,
-                    '2' => Port::IO2,
-                    '3' => Port::IO3,
-                    '4' => Port::IO4,
-                    '5' => Port::IO5,
-                    '6' => Port::IO6,
-                    '7' => Port::IO7,
-                    _ => unreachable!(),
-                };
-                let (s, v) = preceded(
-                    tag(",0x"),
-                    recognize(many_m_n(1, 2, one_of("0123456789abcdef"))),
-                )(s)?;
-                let value = u8::from_str_radix(v, 16).unwrap();
-                (s, Event::Input { port, value })
-            }
-            _ => unreachable!(),
-        };
-        Ok((s, event))
-    }
-
+    /// Parses a raw timed event from a line in an LST file.
     fn parse_lst_line(s: &str) -> Result<Self> {
         let (_, (time, event)) = all_consuming(separated_pair(
-            RawTimedEvent::parse_time,
+            map_res(digit1, |t: &str| t.parse()),
             tag(","),
-            RawTimedEvent::parse_event,
+            Event::parse_lst_event,
         ))(s)
         .map_err(|e| anyhow!("failed to parse: {e}"))?;
         Ok(RawTimedEvent { time, event })
@@ -130,7 +137,7 @@ impl RawTimedEvent {
 
 /// A raw deserialized event log.
 #[derive(Debug, Clone, Deserialize)]
-struct RawEventLog {
+pub struct RawEventLog {
     /// A stream of events, in no particular order.
     events: Vec<RawTimedEvent>,
 }
@@ -160,13 +167,38 @@ impl RawEventLog {
         let file = File::open(path)?;
         Self::from_lst_reader(file)
     }
+
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Ok(match path.as_ref().extension() {
+            Some(e) if e == "json" => RawEventLog::from_json_file(path)?,
+            Some(e) if e == "lst" => RawEventLog::from_lst_file(path)?,
+            _ => return Err(anyhow!("unrecognized file extension")),
+        })
+    }
+}
+impl IntoIterator for RawEventLog {
+    type Item = RawTimedEvent;
+
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.events.into_iter()
+    }
 }
 
 /// A timed event.
-#[derive(Debug, Clone)]
-struct TimedEvent {
-    time: Duration,
-    event: Event,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimedEvent {
+    pub time: Duration,
+    pub event: Event,
+}
+impl From<Event> for TimedEvent {
+    fn from(event: Event) -> Self {
+        TimedEvent {
+            time: Duration::ZERO,
+            event,
+        }
+    }
 }
 impl From<RawTimedEvent> for TimedEvent {
     fn from(e: RawTimedEvent) -> Self {
@@ -176,25 +208,30 @@ impl From<RawTimedEvent> for TimedEvent {
         }
     }
 }
+impl PartialOrd for TimedEvent {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for TimedEvent {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.time.cmp(&other.time).reverse()
+    }
+}
 
 /// An event log.
 #[derive(Debug, Default, Clone)]
 pub struct EventLog {
-    /// A stream of events in ascending order.
-    pending: VecDeque<TimedEvent>,
+    /// Pending events in a min-heap.
+    pending: BinaryHeap<TimedEvent>,
 
-    /// Expired events in descending order.
-    expired: VecDeque<TimedEvent>,
+    /// Expired events, in no particular order.
+    expired: Vec<TimedEvent>,
 }
 impl From<RawEventLog> for EventLog {
     fn from(log: RawEventLog) -> Self {
-        let pending: VecDeque<_> = log
-            .events
-            .into_iter()
-            .map(TimedEvent::from)
-            .sorted_unstable_by_key(|e| e.time)
-            .collect();
-        let expired = VecDeque::with_capacity(pending.len());
+        let pending: BinaryHeap<_> = log.events.into_iter().map(TimedEvent::from).collect();
+        let expired = Vec::with_capacity(pending.len());
         EventLog { pending, expired }
     }
 }
@@ -202,37 +239,77 @@ impl<'a> TryFrom<&'a Args> for EventLog {
     type Error = anyhow::Error;
 
     fn try_from(args: &'a Args) -> Result<Self, Self::Error> {
-        let log = match &args.event_log {
-            Some(path) if path.extension().is_some_and(|e| e == "json") => {
-                let raw = RawEventLog::from_json_file(path)?;
-                raw.into()
-            }
-            Some(path) if path.extension().is_some_and(|e| e == "lst") => {
-                let raw = RawEventLog::from_lst_file(path)?;
-                raw.into()
-            }
-            Some(_) => return Err(anyhow!("unsupported event file format")),
-            None => EventLog::default(),
-        };
-        Ok(log)
+        Ok(match &args.event_log {
+            Some(path) => RawEventLog::from_file(path)?.into(),
+            None => Self::default(),
+        })
     }
 }
 impl EventLog {
+    /// Adds a new event to the event log, with the specified `offset`. An event that occured
+    /// before `now` is treated as expired, whereas an event that occurs at or after `now` is
+    /// treated as pending.
+    pub fn add<E: Into<TimedEvent>>(&mut self, event: E, offset: Duration, now: Duration) {
+        let mut event: TimedEvent = event.into();
+        event.time += offset;
+        if event.time < now {
+            self.expired.push(event);
+        } else {
+            self.pending.push(event);
+        }
+    }
+
+    /// Merges new events into the event log, with the specified `offset`. Events that occured
+    /// before `now` are treated as expired, whereas events that occur at or after `now` are
+    /// treated as pending.
+    pub fn extend<E: Into<TimedEvent>, I: IntoIterator<Item = E>>(
+        &mut self,
+        events: I,
+        offset: Duration,
+        now: Duration,
+    ) {
+        for event in events {
+            self.add(event, offset, now);
+        }
+    }
+
+    /// Removes all events from the log.
+    pub fn clear(&mut self) {
+        self.expired.clear();
+        self.pending.clear();
+    }
+
+    /// Peeks at the next pending event.
+    pub fn peek_next_at(&self, time: Duration) -> Option<&Event> {
+        self.pending
+            .peek()
+            .filter(|e| e.time <= time)
+            .as_ref()
+            .map(|e| &e.event)
+    }
+
+    /// Pops the next pending event.
     pub fn pop_next_at(&mut self, time: Duration) -> Option<Event> {
-        match self.pending.front() {
+        match self.pending.peek() {
             Some(e) if e.time <= time => {
-                let e = self.pending.pop_front().unwrap();
+                let e = self.pending.pop().unwrap();
                 let ev = e.event;
-                self.expired.push_front(e);
+                self.expired.push(e);
                 Some(ev)
             }
             _ => None,
         }
     }
 
+    /// Moves all expired events back into the pending heap.
     pub fn reset(&mut self) {
-        for e in self.expired.drain(..) {
-            self.pending.push_front(e)
+        for e in self.expired.drain(..).rev() {
+            self.pending.push(e)
         }
+    }
+
+    /// Iterates over all events in the log, in no particular order.
+    pub fn iter(&self) -> impl Iterator<Item = &TimedEvent> {
+        self.expired.iter().chain(self.pending.iter())
     }
 }
