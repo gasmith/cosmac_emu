@@ -209,21 +209,17 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
                 break;
             }
             let status = controller.step();
+            controller.print_next();
             match status {
                 Status::Breakpoint => {
-                    controller.print_next();
                     println!("breakpoint");
                     break;
                 }
                 Status::Idle => {
-                    controller.print_next();
                     println!("idle");
                     break;
                 }
-                Status::Event => (),
-                Status::Ready => {
-                    controller.print_next();
-                }
+                _ => (),
             }
         },
         Command::Display => {
