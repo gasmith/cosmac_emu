@@ -85,7 +85,8 @@ fn addc(x: u8, y: u8, df: bool) -> (u8, bool) {
 }
 
 fn sub(x: u8, y: u8) -> (u8, bool) {
-    x.overflowing_sub(y)
+    let (z, overflow) = x.overflowing_sub(y);
+    (z, !overflow)
 }
 
 fn subc(x: u8, y: u8, df: bool) -> (u8, bool) {
