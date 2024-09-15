@@ -128,7 +128,7 @@ impl State {
         // Reset external flags and I/O ports.
         self.int = false;
         for i in 0..4 {
-            self.ef[i] = false;
+            self.ef[i] = true;
         }
         for i in 0..7 {
             self.out[i] = 0;
@@ -209,7 +209,7 @@ impl State {
     /// Prints flags to stdout.
     pub fn print_flags(&self) {
         println!(
-            "df={df} ef={ef0}{ef1}{ef2}{ef3} ie={ie} int={int} q={q}",
+            "df={df} /ef={ef0}{ef1}{ef2}{ef3} ie={ie} int={int} q={q}",
             df = u8::from(self.df),
             ef0 = u8::from(self.ef[0]),
             ef1 = u8::from(self.ef[1]),
@@ -450,10 +450,10 @@ impl State {
             0x1 => self.q,
             0x2 => self.d == 0,
             0x3 => self.df,
-            0x4 => self.ef[0],
-            0x5 => self.ef[1],
-            0x6 => self.ef[2],
-            0x7 => self.ef[3],
+            0x4 => !self.ef[0],
+            0x5 => !self.ef[1],
+            0x6 => !self.ef[2],
+            0x7 => !self.ef[3],
             _ => unreachable!(),
         };
         if inv {
