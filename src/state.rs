@@ -292,7 +292,6 @@ impl State {
             | Instr::B2(nn)
             | Instr::B3(nn)
             | Instr::B4(nn)
-            | Instr::Nbr(nn)
             | Instr::Bnq(nn)
             | Instr::Bnz(nn)
             | Instr::Bnf(nn)
@@ -300,6 +299,7 @@ impl State {
             | Instr::Bn2(nn)
             | Instr::Bn3(nn)
             | Instr::Bn4(nn) => self.handle_bxx(instr.opcode(), nn),
+            Instr::Skp => self.handle_bxx(instr.opcode(), 0),
             Instr::Lda(n) => {
                 // M(R(N)) → D; R(N) + 1 → R(N)
                 self.d = self.load(n);

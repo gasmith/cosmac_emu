@@ -53,8 +53,8 @@ pub enum Instr {
     B3(u8),
     #[schema("37 nn")]
     B4(u8),
-    #[schema("38 nn")]
-    Nbr(u8),
+    #[schema("38")]
+    Skp,
     #[schema("39 nn")]
     Bnq(u8),
     #[schema("3a nn")]
