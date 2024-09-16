@@ -277,14 +277,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "cosmac_sim"
+name = "cosmac_emu"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "byte-unit",
  "clap",
  "clap-repl",
- "cosmac_sim_macros",
+ "cosmac_emu_macros",
  "ctrlc",
  "itertools",
  "nom",
@@ -296,7 +296,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cosmac_sim_macros"
+name = "cosmac_emu_macros"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",

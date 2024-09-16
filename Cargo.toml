@@ -1,12 +1,12 @@
 [package]
-name = "cosmac_sim"
+name = "cosmac_emu"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-cosmac_sim_macros = {path = "./cosmac_sim_macros"}
+cosmac_emu_macros = {path = "./cosmac_emu_macros"}
 anyhow = "1.0.72"
 clap = { version = "4.3.19", features = ["derive"] }
 clap-repl = "0.1.0"

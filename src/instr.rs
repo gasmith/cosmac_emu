@@ -1,4 +1,4 @@
-use cosmac_sim_macros::InstrSchema;
+use cosmac_emu_macros::InstrSchema;
 use itertools::Itertools;
 
 /// The interface for a instruction.
