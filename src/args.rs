@@ -1,6 +1,6 @@
 //! Command-line arguments
 
-use std::{path::PathBuf, sync::OnceLock};
+use std::{path::PathBuf, sync::OnceLock, time::Duration};
 
 use anyhow::{anyhow, Result};
 use byte_unit::Byte;
@@ -24,6 +24,10 @@ pub struct Args {
     /// An event log to replay during program execution.
     #[arg(short, long)]
     pub event_log: Option<PathBuf>,
+
+    /// Machine cycle duration (e.g., 2us for a 4MHz clock).
+    #[arg(short, long, value_parser=parse_duration::parse, default_value="2us")]
+    pub cycle_time: Duration,
 }
 
 /// An image to be loaded at the specified base address.

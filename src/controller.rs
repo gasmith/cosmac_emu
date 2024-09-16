@@ -33,16 +33,16 @@ impl<'a> TryFrom<&'a Args> for Controller {
         let memory = Memory::try_from(args)?;
         let state = State::new(memory);
         let events = EventLog::try_from(args)?;
-        Ok(Self::new(state).with_events(events))
+        Ok(Self::new(state, args.cycle_time).with_events(events))
     }
 }
 impl Controller {
-    pub fn new(state: State) -> Self {
+    pub fn new(state: State, cycle_time: Duration) -> Self {
         Self {
             state,
             events: EventLog::default(),
             breakpoints: HashSet::default(),
-            cycle_time: Duration::from_micros(2),
+            cycle_time,
         }
     }
 
