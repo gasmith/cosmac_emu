@@ -299,7 +299,11 @@ impl State {
             | Instr::Bn2(nn)
             | Instr::Bn3(nn)
             | Instr::Bn4(nn) => self.handle_bxx(instr.opcode(), nn),
-            Instr::Skp => self.handle_bxx(instr.opcode(), 0),
+            Instr::Skp => {
+                // Also schematized as `NBR nn`, where `nn` is ignored.
+                self.handle_bxx(instr.opcode(), 0);
+                self.inc(self.p);
+            }
             Instr::Lda(n) => {
                 // M(R(N)) → D; R(N) + 1 → R(N)
                 self.d = self.load(n);
