@@ -1,6 +1,6 @@
 use rand::{thread_rng, Rng};
 
-use crate::event::{Event, Flag, Port};
+use crate::event::{Flag, InputEvent, OutputEvent, Port};
 use crate::instr::{Instr, InstrSchema};
 use crate::memory::Memory;
 
@@ -251,11 +251,15 @@ impl State {
     }
 
     /// Advances the state machine.
-    pub fn step(&mut self) {
+    #[must_use]
+    pub fn step(&mut self) -> Option<OutputEvent> {
         if self.ie && self.int {
             self.handle_interrupt();
+            None
         } else if let Some(instr) = self.decode_rp() {
-            self.handle_instr(instr);
+            self.handle_instr(instr)
+        } else {
+            None
         }
     }
 
@@ -275,7 +279,7 @@ impl State {
 
     /// Runs the next instruction.
     #[allow(clippy::too_many_lines)]
-    fn handle_instr(&mut self, instr: Instr) {
+    fn handle_instr(&mut self, instr: Instr) -> Option<OutputEvent> {
         let size = instr.size();
         self.inc_by(self.p, size);
         self.cycle += if size == 3 { 3 } else { 2 };
@@ -313,10 +317,22 @@ impl State {
             Instr::Irx => self.inc(self.x),
             Instr::Out(n) => {
                 assert!(n > 0 && n <= 7);
-                let v = self.load(self.x);
-                self.out[usize::from(n - 1)] = v;
-                println!("OUT{n}: {v:02x}");
+                let value = self.load(self.x);
+                self.out[usize::from(n - 1)] = value;
                 self.inc(self.x);
+                return Some(OutputEvent::Output {
+                    port: match n {
+                        0 => Port::IO1,
+                        1 => Port::IO2,
+                        2 => Port::IO3,
+                        3 => Port::IO4,
+                        4 => Port::IO5,
+                        5 => Port::IO6,
+                        6 => Port::IO7,
+                        _ => unreachable!(),
+                    },
+                    value,
+                });
             }
             Instr::Resv68 => (),
             Instr::Inp(n) => {
@@ -381,8 +397,14 @@ impl State {
                 self.x = self.p;
                 self.dec(2);
             }
-            Instr::Req => self.q = false,
-            Instr::Seq => self.q = true,
+            Instr::Req => {
+                self.q = false;
+                return Some(OutputEvent::Q { value: false });
+            }
+            Instr::Seq => {
+                self.q = true;
+                return Some(OutputEvent::Q { value: true });
+            }
             Instr::Adci(nn) => {
                 // M(R(P)) + D + DF → DF, D; R(P) + 1 → R(P)
                 (self.d, self.df) = addc(nn, self.d, self.df);
@@ -443,7 +465,8 @@ impl State {
             Instr::Sdi(n) => (self.d, self.df) = sub(n, self.d),
             Instr::Shl => (self.d, self.df) = (self.d << 1, self.d & 0x80 != 0),
             Instr::Smi(n) => (self.d, self.df) = sub(self.d, n),
-        }
+        };
+        None
     }
 
     /// Handles the `Bxx` family of instructions.
@@ -515,10 +538,10 @@ impl State {
     }
 
     /// Applies an external event.
-    pub fn apply_event(&mut self, event: Event) {
+    pub fn apply_event(&mut self, event: InputEvent) {
         match event {
-            Event::Interrupt => self.int = true,
-            Event::Flag { flag, value } => {
+            InputEvent::Interrupt => self.int = true,
+            InputEvent::Flag { flag, value } => {
                 let index = match flag {
                     Flag::EF1 => 0,
                     Flag::EF2 => 1,
@@ -527,7 +550,7 @@ impl State {
                 };
                 self.ef[index] = value;
             }
-            Event::Input { port, value } => {
+            InputEvent::Input { port, value } => {
                 let index = match port {
                     Port::IO1 => 0,
                     Port::IO2 => 1,

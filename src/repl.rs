@@ -15,7 +15,7 @@ use nom::sequence::pair;
 use nom::IResult;
 
 use crate::controller::{Controller, Status};
-use crate::event::Event;
+use crate::event::{InputEvent, ParseLst};
 use crate::instr::InstrSchema;
 
 #[derive(Debug, Clone, Parser)]
@@ -71,16 +71,16 @@ enum Command {
     #[command(alias = "z")]
     Reset,
     /// Adds a single event.
-    #[command(alias = "e")]
-    EventAdd {
+    #[command(alias = "ie")]
+    AddInputEvent {
         /// The event, in lst form.
         ///
         /// Examples:
         ///  - int
         ///  - flag,ef[1-4],[01]
         ///  - input,io[1-7],0x[0-1a-f]
-        #[arg(value_parser=Event::from_lst_str, verbatim_doc_comment)]
-        event: Event,
+        #[arg(value_parser=InputEvent::from_lst, verbatim_doc_comment)]
+        event: InputEvent,
 
         /// The offset from the start of execution, in nanoseconds. If not specified, defaults to
         /// "now", i.e. nanoseconds since the last reset.
@@ -88,8 +88,8 @@ enum Command {
         when: When,
     },
     /// Adds events from the specified log file.
-    #[command(alias = "ee")]
-    EventExtend {
+    #[command(alias = "ies")]
+    ExtendInputEvents {
         /// Path to the event log file.
         #[arg()]
         path: PathBuf,
@@ -100,11 +100,14 @@ enum Command {
         when: When,
     },
     /// Lists events.
-    #[command(alias = "el")]
-    EventList,
+    #[command(alias = "lie")]
+    ListInputEvents,
     /// Clears all events.
-    #[command(alias = "ec")]
-    EventClear,
+    #[command(alias = "cie")]
+    ClearInputEvents,
+    /// Lists events.
+    #[command(alias = "loe")]
+    ListOutputEvents,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -291,17 +294,18 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
         Command::PokeMem { addr, byte } => {
             controller.state_mut().m.store(addr, byte);
         }
-        Command::EventAdd { event, when } => {
+        Command::AddInputEvent { event, when } => {
             let offset = when.into_absolute(controller.now());
             controller.add_event(event, offset);
         }
-        Command::EventExtend { path, when } => {
+        Command::ExtendInputEvents { path, when } => {
             let offset = when.into_absolute(controller.now());
             if let Err(e) = controller.extend_events(path, offset) {
                 eprintln!("{e}");
             }
         }
-        Command::EventList => controller.print_events(),
-        Command::EventClear => controller.events_mut().clear(),
+        Command::ListInputEvents => controller.print_input_events(),
+        Command::ClearInputEvents => controller.events_mut().clear(),
+        Command::ListOutputEvents => controller.print_output_events(),
     }
 }

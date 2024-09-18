@@ -22,8 +22,8 @@ pub struct Args {
     pub memory_size: usize,
 
     /// An event log to replay during program execution.
-    #[arg(short, long)]
-    pub event_log: Option<PathBuf>,
+    #[arg(long)]
+    pub input_events: Option<PathBuf>,
 
     /// Machine cycle duration (e.g., 2us for a 4MHz clock).
     #[arg(short, long, value_parser=parse_duration::parse, default_value="2us")]
