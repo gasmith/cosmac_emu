@@ -322,13 +322,13 @@ impl State {
                 self.inc(self.x);
                 return Some(OutputEvent::Output {
                     port: match n {
-                        0 => Port::IO1,
-                        1 => Port::IO2,
-                        2 => Port::IO3,
-                        3 => Port::IO4,
-                        4 => Port::IO5,
-                        5 => Port::IO6,
-                        6 => Port::IO7,
+                        1 => Port::IO1,
+                        2 => Port::IO2,
+                        3 => Port::IO3,
+                        4 => Port::IO4,
+                        5 => Port::IO5,
+                        6 => Port::IO6,
+                        7 => Port::IO7,
                         _ => unreachable!(),
                     },
                     value,
