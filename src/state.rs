@@ -92,7 +92,7 @@ fn sub(x: u8, y: u8) -> (u8, bool) {
 fn subc(x: u8, y: u8, df: bool) -> (u8, bool) {
     let (acc, df1) = sub(x, y);
     let (acc, df2) = sub(acc, df.into());
-    (acc, df1 || df2)
+    (acc, df1 && df2)
 }
 
 impl State {
@@ -594,21 +594,21 @@ mod test {
 
     #[test]
     fn test_sub() {
-        assert_eq!(sub(0, 0), (0, false));
-        assert_eq!(sub(0, 1), (0xff, true));
-        assert_eq!(sub(1, 0), (1, false));
-        assert_eq!(sub(0xff, 1), (0xfe, false));
-        assert_eq!(sub(1, 0xff), (2, true));
+        assert_eq!(sub(0, 0), (0, true));
+        assert_eq!(sub(0, 1), (0xff, false));
+        assert_eq!(sub(1, 0), (1, true));
+        assert_eq!(sub(0xff, 1), (0xfe, true));
+        assert_eq!(sub(1, 0xff), (2, false));
     }
 
     #[test]
     fn test_subc() {
-        assert_eq!(subc(0, 0, false), (0, false));
-        assert_eq!(subc(1, 1, false), (0, false));
-        assert_eq!(subc(1, 0, true), (0, false));
-        assert_eq!(subc(1, 1, true), (0xff, true));
-        assert_eq!(subc(0, 0, true), (0xff, true));
-        assert_eq!(subc(0, 1, false), (0xff, true));
-        assert_eq!(subc(0, 1, true), (0xfe, true));
+        assert_eq!(subc(0, 0, false), (0, true));
+        assert_eq!(subc(1, 1, false), (0, true));
+        assert_eq!(subc(1, 0, true), (0, true));
+        assert_eq!(subc(1, 1, true), (0xff, false));
+        assert_eq!(subc(0, 0, true), (0xff, false));
+        assert_eq!(subc(0, 1, false), (0xff, false));
+        assert_eq!(subc(0, 1, true), (0xfe, false));
     }
 }
