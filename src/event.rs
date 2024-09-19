@@ -279,16 +279,9 @@ impl<E: ParseEvLog> EventLog<E> {
         Ok(Self { events })
     }
 
-    fn from_evlog_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let file = File::open(path)?;
         Self::from_evlog_reader(file)
-    }
-
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-        Ok(match path.as_ref().extension() {
-            Some(e) if e == "evlog" => EventLog::from_evlog_file(path)?,
-            _ => return Err(anyhow!("unrecognized file extension")),
-        })
     }
 
     pub fn write_to_evlog_writer<W: Write>(&self, mut writer: W) -> Result<()> {
@@ -298,16 +291,9 @@ impl<E: ParseEvLog> EventLog<E> {
         Ok(())
     }
 
-    pub fn write_to_evlog_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+    pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let file = File::create(path)?;
         self.write_to_evlog_writer(file)
-    }
-
-    pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        match path.as_ref().extension() {
-            Some(e) if e == "evlog" => self.write_to_evlog_file(path),
-            _ => Err(anyhow!("unrecognized file extension")),
-        }
     }
 
     /// Appends an event to the log. The caller is responsible for ordering.
