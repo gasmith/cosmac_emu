@@ -116,6 +116,10 @@ impl Controller {
         }
     }
 
+    pub fn write_output_events<P: AsRef<Path>>(&self, path: P) -> Result<(), anyhow::Error> {
+        self.output_events.write_to_file(path)
+    }
+
     pub fn events_mut(&mut self) -> &mut InputEventLog {
         &mut self.input_events
     }

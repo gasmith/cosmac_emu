@@ -28,6 +28,14 @@ pub struct Args {
     /// Machine cycle duration (e.g., 2us for a 4MHz clock).
     #[arg(short, long, value_parser=parse_duration::parse, default_value="2us")]
     pub cycle_time: Duration,
+
+    /// Runs until the specified duration, and then exits.
+    #[arg(long, value_parser=parse_duration::parse)]
+    pub run_duration: Option<Duration>,
+
+    /// An output event log to write on exit.
+    #[arg(long)]
+    pub output_events: Option<PathBuf>,
 }
 
 /// An image to be loaded at the specified base address.

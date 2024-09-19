@@ -17,6 +17,15 @@ use self::controller::Controller;
 fn main() -> Result<()> {
     let args: Args = Args::parse();
     let mut controller = Controller::try_from(&args)?;
-    repl::run(&mut controller);
+    if let Some(duration) = args.run_duration {
+        while controller.time() < duration {
+            _ = controller.step();
+        }
+    } else {
+        repl::run(&mut controller);
+    }
+    if let Some(path) = args.output_events {
+        controller.write_output_events(&path)?;
+    }
     Ok(())
 }

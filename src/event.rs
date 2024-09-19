@@ -5,7 +5,7 @@ use std::{
     cmp::Ordering,
     collections::BinaryHeap,
     fs::File,
-    io::{BufRead, BufReader, Read},
+    io::{BufRead, BufReader, Read, Write},
     path::Path,
 };
 
@@ -291,6 +291,25 @@ impl<E: ParseLst> EventLog<E> {
         })
     }
 
+    pub fn write_to_lst_writer<W: Write>(&self, mut writer: W) -> Result<()> {
+        for event in &self.events {
+            writeln!(writer, "{}", event.to_lst())?;
+        }
+        Ok(())
+    }
+
+    pub fn write_to_lst_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let file = File::create(path)?;
+        self.write_to_lst_writer(file)
+    }
+
+    pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        match path.as_ref().extension() {
+            Some(e) if e == "lst" => self.write_to_lst_file(path),
+            _ => Err(anyhow!("unrecognized file extension")),
+        }
+    }
+
     /// Appends an event to the log. The caller is responsible for ordering.
     pub fn push(&mut self, event: Timed<E>) {
         self.events.push(event)
@@ -338,7 +357,7 @@ impl<'a> TryFrom<&'a Args> for InputEventLog {
 
     fn try_from(args: &'a Args) -> Result<Self, Self::Error> {
         Ok(match &args.input_events {
-            Some(path) => EventLog::from_file(path)?.try_into()?,
+            Some(path) => EventLog::from_file(path)?.into(),
             None => Self::default(),
         })
     }
