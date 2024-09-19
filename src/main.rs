@@ -21,11 +21,11 @@ fn main() -> Result<()> {
         while controller.time() < duration {
             _ = controller.step();
         }
+        if let Some(path) = args.output_events {
+            controller.write_output_events(&path)?;
+        }
     } else {
         repl::run(&mut controller);
-    }
-    if let Some(path) = args.output_events {
-        controller.write_output_events(&path)?;
     }
     Ok(())
 }
