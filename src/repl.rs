@@ -15,7 +15,7 @@ use nom::sequence::pair;
 use nom::IResult;
 
 use crate::controller::{Controller, Status};
-use crate::event::{InputEvent, ParseLst};
+use crate::event::{InputEvent, ParseEvLog};
 use crate::instr::InstrSchema;
 
 #[derive(Debug, Clone, Parser)]
@@ -73,13 +73,13 @@ enum Command {
     /// Adds a single event.
     #[command(alias = "ie")]
     AddInputEvent {
-        /// The event, in lst form.
+        /// The event, in evlog form.
         ///
         /// Examples:
         ///  - int
         ///  - flag,ef[1-4],[01]
         ///  - input,io[1-7],0x[0-1a-f]
-        #[arg(value_parser=InputEvent::from_lst, verbatim_doc_comment)]
+        #[arg(value_parser=InputEvent::from_evlog, verbatim_doc_comment)]
         event: InputEvent,
 
         /// The offset from the start of execution, in nanoseconds. If not specified, defaults to

@@ -22,15 +22,15 @@ use nom::{
 
 use crate::args::Args;
 
-/// A trait for parsing an object from an lst line.
-pub trait ParseLst: Sized {
-    fn parse_lst(s: &str) -> IResult<&str, Self>;
+/// A trait for parsing an object from an evlog line.
+pub trait ParseEvLog: Sized {
+    fn parse_evlog(s: &str) -> IResult<&str, Self>;
 
-    fn to_lst(&self) -> String;
+    fn to_evlog(&self) -> String;
 
-    fn from_lst(s: &str) -> Result<Self> {
+    fn from_evlog(s: &str) -> Result<Self> {
         let (_, event) =
-            all_consuming(Self::parse_lst)(s).map_err(|e| anyhow!("failed to parse: {e}"))?;
+            all_consuming(Self::parse_evlog)(s).map_err(|e| anyhow!("failed to parse: {e}"))?;
         Ok(event)
     }
 }
@@ -43,8 +43,8 @@ pub enum Flag {
     EF3,
     EF4,
 }
-impl ParseLst for Flag {
-    fn parse_lst(s: &str) -> IResult<&str, Flag> {
+impl ParseEvLog for Flag {
+    fn parse_evlog(s: &str) -> IResult<&str, Flag> {
         map(preceded(tag("ef"), one_of("1234")), |c: char| match c {
             '1' => Flag::EF1,
             '2' => Flag::EF2,
@@ -54,7 +54,7 @@ impl ParseLst for Flag {
         })(s)
     }
 
-    fn to_lst(&self) -> String {
+    fn to_evlog(&self) -> String {
         match self {
             Flag::EF1 => "ef1",
             Flag::EF2 => "ef2",
@@ -76,8 +76,8 @@ pub enum Port {
     IO6,
     IO7,
 }
-impl ParseLst for Port {
-    fn parse_lst(s: &str) -> IResult<&str, Port> {
+impl ParseEvLog for Port {
+    fn parse_evlog(s: &str) -> IResult<&str, Port> {
         map_res(preceded(tag(",io"), one_of("1234567")), |c: char| {
             Ok::<Port, anyhow::Error>(match c {
                 '1' => Port::IO1,
@@ -92,7 +92,7 @@ impl ParseLst for Port {
         })(s)
     }
 
-    fn to_lst(&self) -> String {
+    fn to_evlog(&self) -> String {
         match self {
             Port::IO1 => "io1",
             Port::IO2 => "io2",
@@ -136,21 +136,21 @@ pub enum InputEvent {
     /// Inputs a byte on the specified port.
     Input { port: Port, value: u8 },
 }
-impl ParseLst for InputEvent {
-    fn parse_lst(s: &str) -> IResult<&str, InputEvent> {
+impl ParseEvLog for InputEvent {
+    fn parse_evlog(s: &str) -> IResult<&str, InputEvent> {
         let (s, event_type) = alt((tag("int"), tag("flag"), tag("input")))(s)?;
         match event_type {
             "int" => Ok((s, InputEvent::Interrupt)),
             "flag" => map(
                 tuple((
-                    preceded(tag(","), Flag::parse_lst),
+                    preceded(tag(","), Flag::parse_evlog),
                     preceded(tag(","), parse_bool),
                 )),
                 |(flag, value)| InputEvent::Flag { flag, value },
             )(s),
             "input" => map(
                 tuple((
-                    preceded(tag(","), Port::parse_lst),
+                    preceded(tag(","), Port::parse_evlog),
                     preceded(tag(","), parse_hex_byte),
                 )),
                 |(port, value)| InputEvent::Input { port, value },
@@ -159,13 +159,13 @@ impl ParseLst for InputEvent {
         }
     }
 
-    fn to_lst(&self) -> String {
+    fn to_evlog(&self) -> String {
         match self {
             InputEvent::Interrupt => "int".into(),
             InputEvent::Flag { flag, value } => {
-                format!("flag,{},{}", flag.to_lst(), u8::from(*value))
+                format!("flag,{},{}", flag.to_evlog(), u8::from(*value))
             }
-            InputEvent::Input { port, value } => format!("input,{},0x{value:02x}", port.to_lst()),
+            InputEvent::Input { port, value } => format!("input,{},0x{value:02x}", port.to_evlog()),
         }
     }
 }
@@ -177,8 +177,8 @@ pub enum OutputEvent {
     /// Outputs a byte on the specified port.
     Output { port: Port, value: u8 },
 }
-impl ParseLst for OutputEvent {
-    fn parse_lst(s: &str) -> IResult<&str, OutputEvent> {
+impl ParseEvLog for OutputEvent {
+    fn parse_evlog(s: &str) -> IResult<&str, OutputEvent> {
         let (s, event_type) = alt((tag("q"), tag("output")))(s)?;
         match event_type {
             "q" => map(preceded(tag(","), parse_bool), |value| OutputEvent::Q {
@@ -186,7 +186,7 @@ impl ParseLst for OutputEvent {
             })(s),
             "output" => map(
                 tuple((
-                    preceded(tag(","), Port::parse_lst),
+                    preceded(tag(","), Port::parse_evlog),
                     preceded(tag(","), parse_hex_byte),
                 )),
                 |(port, value)| OutputEvent::Output { port, value },
@@ -195,11 +195,11 @@ impl ParseLst for OutputEvent {
         }
     }
 
-    fn to_lst(&self) -> String {
+    fn to_evlog(&self) -> String {
         match self {
             OutputEvent::Q { value } => format!("q,{}", u8::from(*value)),
             OutputEvent::Output { port, value } => {
-                format!("output,{},0x{value:02x}", port.to_lst())
+                format!("output,{},0x{value:02x}", port.to_evlog())
             }
         }
     }
@@ -229,20 +229,20 @@ impl<E> From<E> for Timed<E> {
         Timed::new(Duration::ZERO, event)
     }
 }
-impl<E: ParseLst> ParseLst for Timed<E> {
-    fn parse_lst(s: &str) -> IResult<&str, Self> {
+impl<E: ParseEvLog> ParseEvLog for Timed<E> {
+    fn parse_evlog(s: &str) -> IResult<&str, Self> {
         map(
             separated_pair(
                 map_res(digit1, |t: &str| t.parse().map(Duration::from_nanos)),
                 tag(","),
-                E::parse_lst,
+                E::parse_evlog,
             ),
             |(time, event)| Self { time, event },
         )(s)
     }
 
-    fn to_lst(&self) -> String {
-        format!("{},{}", self.time.as_nanos(), self.event.to_lst())
+    fn to_evlog(&self) -> String {
+        format!("{},{}", self.time.as_nanos(), self.event.to_evlog())
     }
 }
 impl<E: Eq + PartialEq> PartialOrd for Timed<E> {
@@ -267,45 +267,45 @@ impl<E> Default for EventLog<E> {
         Self { events: vec![] }
     }
 }
-impl<E: ParseLst> EventLog<E> {
-    fn from_lst_reader<R: Read>(reader: R) -> Result<Self> {
+impl<E: ParseEvLog> EventLog<E> {
+    fn from_evlog_reader<R: Read>(reader: R) -> Result<Self> {
         let br = BufReader::new(reader);
         let mut events = vec![];
         for line in br.lines() {
             let line = line?;
-            let event = ParseLst::from_lst(&line)?;
+            let event = ParseEvLog::from_evlog(&line)?;
             events.push(event);
         }
         Ok(Self { events })
     }
 
-    fn from_lst_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+    fn from_evlog_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let file = File::open(path)?;
-        Self::from_lst_reader(file)
+        Self::from_evlog_reader(file)
     }
 
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         Ok(match path.as_ref().extension() {
-            Some(e) if e == "lst" => EventLog::from_lst_file(path)?,
+            Some(e) if e == "evlog" => EventLog::from_evlog_file(path)?,
             _ => return Err(anyhow!("unrecognized file extension")),
         })
     }
 
-    pub fn write_to_lst_writer<W: Write>(&self, mut writer: W) -> Result<()> {
+    pub fn write_to_evlog_writer<W: Write>(&self, mut writer: W) -> Result<()> {
         for event in &self.events {
-            writeln!(writer, "{}", event.to_lst())?;
+            writeln!(writer, "{}", event.to_evlog())?;
         }
         Ok(())
     }
 
-    pub fn write_to_lst_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+    pub fn write_to_evlog_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let file = File::create(path)?;
-        self.write_to_lst_writer(file)
+        self.write_to_evlog_writer(file)
     }
 
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         match path.as_ref().extension() {
-            Some(e) if e == "lst" => self.write_to_lst_file(path),
+            Some(e) if e == "evlog" => self.write_to_evlog_file(path),
             _ => Err(anyhow!("unrecognized file extension")),
         }
     }

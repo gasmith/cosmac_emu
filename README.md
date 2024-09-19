@@ -24,13 +24,13 @@ file, containing rows of `time_ns,event_type[,payload]`, and specify the
 duration of each machine cycle:
 
 ```console
-$ cat events.lst
+$ cat events.evlog
 110200,flag,ef3,0
 232920,flag,ef3,1
 593003,int
 969022,input,io5,fb
 
-$ cargo run -- --image event-test.bin --event-log events.lst --cycle-time 2us
+$ cargo run -- --image event-test.bin --event-log events.evlog --cycle-time 2us
 00000000 d=00.0 x=00:0000:f8 p=00:0000:f8 08    ldi  8
 >>
 ```
