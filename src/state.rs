@@ -435,10 +435,15 @@ impl State {
             | Instr::Lbq(hh, ll)
             | Instr::Lbz(hh, ll)
             | Instr::Lbdf(hh, ll)
-            | Instr::Nlbr(hh, ll)
             | Instr::Lbnq(hh, ll)
             | Instr::Lbnz(hh, ll)
             | Instr::Lbnf(hh, ll) => self.handle_lbxx(instr.opcode(), hh, ll),
+            Instr::Lskp => {
+                // Also schematized as `NLBR hh ll`, where `hh ll` is ignored.
+                self.handle_lbxx(instr.opcode(), 0, 0);
+                self.inc(self.p);
+                self.inc(self.p);
+            }
             Instr::Nop
             | Instr::Lsnq
             | Instr::Lsnz

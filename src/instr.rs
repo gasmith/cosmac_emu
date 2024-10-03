@@ -137,8 +137,8 @@ pub enum Instr {
     Lsnz,
     #[schema("c7")]
     Lsnf,
-    #[schema("c8 hh ll")]
-    Nlbr(u8, u8),
+    #[schema("c8")]
+    Lskp,
     #[schema("c9 hh ll")]
     Lbnq(u8, u8),
     #[schema("ca hh ll")]
