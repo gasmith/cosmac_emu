@@ -61,7 +61,7 @@ fn parse_bytes(arg: &str) -> Result<usize> {
 /// Parses an image from a string with an optional base address.
 fn parse_image(image: &str) -> Result<Image> {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"^([^@]+)(@0x([0-9af]+))?$").unwrap());
+    let re = RE.get_or_init(|| Regex::new(r"^([^@]+)(@0x([0-9a-f]+))?$").unwrap());
     let cap = re.captures(image).ok_or(anyhow!("invalid image"))?;
     let path = PathBuf::from(cap.get(1).unwrap().as_str());
     let base_addr = match cap.get(3) {
