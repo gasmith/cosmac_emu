@@ -14,6 +14,7 @@ use nom::combinator::{all_consuming, map, map_res, rest};
 use nom::sequence::pair;
 use nom::IResult;
 
+use crate::args::parse_duration;
 use crate::controller::{Controller, Status};
 use crate::event::{InputEvent, ParseEvLog};
 use crate::instr::InstrSchema;
@@ -133,10 +134,7 @@ impl When {
         alt((
             map(tag("now"), |_| When::Now),
             map(
-                pair(
-                    one_of("@+-"),
-                    map_res(rest, |s: &str| parse_duration::parse(s)),
-                ),
+                pair(one_of("@+-"), map_res(rest, |s: &str| parse_duration(s))),
                 |(t, d)| match t {
                     '@' => When::Absolute(d),
                     '+' => When::Future(d),

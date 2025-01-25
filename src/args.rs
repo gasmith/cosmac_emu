@@ -26,11 +26,11 @@ pub struct Args {
     pub input_events: Option<PathBuf>,
 
     /// Machine cycle duration (e.g., 2us for a 4MHz clock).
-    #[arg(short, long, value_parser=parse_duration::parse, default_value="2us")]
+    #[arg(short, long, value_parser=parse_duration, default_value="2us")]
     pub cycle_time: Duration,
 
     /// Runs until the specified duration, and then exits.
-    #[arg(long, value_parser=parse_duration::parse)]
+    #[arg(long, value_parser=parse_duration)]
     pub run_duration: Option<Duration>,
 
     /// An output event log to write on exit.
@@ -56,6 +56,31 @@ fn parse_bytes(arg: &str) -> Result<usize> {
     } else {
         Ok(size)
     }
+}
+
+/// Parses a duration.
+pub fn parse_duration(input: &str) -> Result<Duration> {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    let captures = REGEX
+        .get_or_init(|| Regex::new(r"^([0-9]+)([nuμm]s|[smhd])?$").expect("valid regex"))
+        .captures(input)
+        .ok_or(anyhow!("invalid duration"))?;
+    let value: u64 = captures[1]
+        .parse()
+        .map_err(|e| anyhow!("invalid duration value: {e}"))?;
+    if value == 0 {
+        return Err(anyhow!("duration must be non-zero"));
+    }
+    Ok(match captures.get(2).map(|s| s.as_str()) {
+        Some("ns") => Duration::from_nanos(value),
+        Some("us" | "μs") => Duration::from_micros(value),
+        Some("ms") => Duration::from_millis(value),
+        Some("s") | None => Duration::from_secs(value),
+        Some("m") => Duration::from_secs(value * 60),
+        Some("h") => Duration::from_secs(value * 60 * 60),
+        Some("d") => Duration::from_secs(value * 60 * 60 * 24),
+        _ => unreachable!("unsupported suffix"),
+    })
 }
 
 /// Parses an image from a string with an optional base address.
