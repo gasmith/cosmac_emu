@@ -11,9 +11,11 @@ use regex::Regex;
 #[derive(Parser, Debug)]
 #[command(version, about)]
 pub struct Args {
-    /// Image file to load into RAM. May be provided multiple times. By default the image is loaded
-    /// at base address 0x0000. To load an image at an alternative base address, specify the image
-    /// as `<path>@0x0800`. Images are loaded in the order they are provided on the command line.
+    /// Image file to load into RAM. May be provided multiple times.
+    ///
+    /// By default the image is loaded at base address 0x0000. To load an image at an alternative
+    /// base address, specify the image as `<path>@0x0800`. Images are loaded in the order they are
+    /// provided on the command line.
     #[arg(short, long, value_parser=parse_image)]
     pub image: Vec<Image>,
 
@@ -29,13 +31,19 @@ pub struct Args {
     #[arg(short, long, value_parser=parse_duration, default_value="2us")]
     pub cycle_time: Duration,
 
-    /// Runs until the specified duration, and then exits.
+    /// Runs until the specified duration, as measured from the controller's clock, then exits.
     #[arg(long, value_parser=parse_duration)]
     pub run_duration: Option<Duration>,
 
     /// An output event log to write on exit.
     #[arg(long)]
     pub output_events: Option<PathBuf>,
+
+    /// Run the processor in realtime.
+    ///
+    /// If not specified, the processor runs as fast as the emulation will allow.
+    #[arg(long)]
+    pub realtime: bool,
 }
 
 /// An image to be loaded at the specified base address.

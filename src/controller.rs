@@ -10,6 +10,7 @@ use crate::args::Args;
 use crate::event::{EventLog, InputEvent, InputEventLog, OutputEventLog, Timed};
 use crate::memory::Memory;
 use crate::state::State;
+use crate::time::TimeTracker;
 
 #[derive(Debug, Clone, Copy, Hash)]
 pub enum Status {
@@ -26,6 +27,7 @@ pub struct Controller {
     output_events: OutputEventLog,
     breakpoints: HashSet<u16>,
     cycle_time: Duration,
+    time_tracker: Option<TimeTracker>,
 }
 impl<'a> TryFrom<&'a Args> for Controller {
     type Error = anyhow::Error;
@@ -34,7 +36,9 @@ impl<'a> TryFrom<&'a Args> for Controller {
         let memory = Memory::try_from(args)?;
         let state = State::new(memory);
         let events = InputEventLog::try_from(args)?;
-        Ok(Self::new(state, args.cycle_time).with_events(events))
+        Ok(Self::new(state, args.cycle_time)
+            .with_events(events)
+            .with_realtime(args.realtime))
     }
 }
 impl Controller {
@@ -45,11 +49,21 @@ impl Controller {
             output_events: OutputEventLog::default(),
             breakpoints: HashSet::default(),
             cycle_time,
+            time_tracker: None,
         }
     }
 
     pub fn with_events(mut self, events: InputEventLog) -> Self {
         self.input_events = events;
+        self
+    }
+
+    pub fn with_realtime(mut self, realtime: bool) -> Self {
+        if realtime {
+            self.time_tracker = Some(TimeTracker::default());
+        } else {
+            self.time_tracker = None;
+        }
         self
     }
 
@@ -131,6 +145,9 @@ impl Controller {
 
     pub fn step(&mut self) -> Status {
         let time = self.time();
+        if let Some(tt) = &mut self.time_tracker {
+            tt.sleep_until(time);
+        }
         if let Some(e) = self.input_events.pop_next_at(time) {
             self.state.apply_event(e);
             Status::Event

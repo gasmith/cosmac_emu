@@ -10,6 +10,7 @@ mod instr;
 mod memory;
 mod repl;
 mod state;
+mod time;
 
 use self::args::Args;
 use self::controller::Controller;
