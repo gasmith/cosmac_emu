@@ -9,7 +9,7 @@ use std::{
     path::Path,
 };
 
-use anyhow::{anyhow, Result};
+use color_eyre::{eyre, Result};
 use nom::{
     branch::alt,
     bytes::complete::tag,
@@ -20,8 +20,6 @@ use nom::{
     IResult,
 };
 
-use crate::args::Args;
-
 /// A trait for parsing an object from an evlog line.
 pub trait ParseEvLog: Sized {
     fn parse_evlog(s: &str) -> IResult<&str, Self>;
@@ -30,7 +28,7 @@ pub trait ParseEvLog: Sized {
 
     fn from_evlog(s: &str) -> Result<Self> {
         let (_, event) =
-            all_consuming(Self::parse_evlog)(s).map_err(|e| anyhow!("failed to parse: {e}"))?;
+            all_consuming(Self::parse_evlog)(s).map_err(|e| eyre::eyre!("failed to parse: {e}"))?;
         Ok(event)
     }
 }
@@ -67,8 +65,9 @@ impl ParseEvLog for Flag {
 
 /// I/O ports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum Port {
-    IO1,
+    IO1 = 1,
     IO2,
     IO3,
     IO4,
@@ -79,7 +78,7 @@ pub enum Port {
 impl ParseEvLog for Port {
     fn parse_evlog(s: &str) -> IResult<&str, Port> {
         map_res(preceded(tag(",io"), one_of("1234567")), |c: char| {
-            Ok::<Port, anyhow::Error>(match c {
+            Ok::<Port, eyre::Error>(match c {
                 '1' => Port::IO1,
                 '2' => Port::IO2,
                 '3' => Port::IO3,
@@ -108,7 +107,7 @@ impl ParseEvLog for Port {
 
 fn parse_bool(s: &str) -> IResult<&str, bool> {
     map_res(one_of("01"), |c: char| {
-        Ok::<bool, anyhow::Error>(match c {
+        Ok::<bool, eyre::Error>(match c {
             '0' => false,
             '1' => true,
             _ => unreachable!(),
@@ -338,17 +337,12 @@ impl From<EventLog<InputEvent>> for InputEventLog {
         InputEventLog { pending, expired }
     }
 }
-impl<'a> TryFrom<&'a Args> for InputEventLog {
-    type Error = anyhow::Error;
-
-    fn try_from(args: &'a Args) -> Result<Self, Self::Error> {
-        Ok(match &args.input_events {
-            Some(path) => EventLog::from_file(path)?.into(),
-            None => Self::default(),
-        })
-    }
-}
 impl InputEventLog {
+    /// Reads an input event log from a file path.
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
+        EventLog::from_file(path).map(Self::from)
+    }
+
     /// Adds a new event to the event log, with the specified `offset`. An event that occured
     /// before `now` is treated as expired, whereas an event that occurs at or after `now` is
     /// treated as pending.

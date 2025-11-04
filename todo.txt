@@ -1,12 +1,55 @@
-- Add a memory map:
-  - Map ranges to flags (rw/ro)
-  - Define out-of-bound access (0x00? 0xff?)
-- Input log
-  - Sequence of (timestamp, event) pairs
-  - Timestamps:
-    - Relative, perhaps with units (ns, us, cycle)
-  - Events:
-    - Interrupt
-    - SetFlag{ flag: u8, val: u8 }
-    - Input{ port: u8, data: u8 }
+- Rework event logs
+  - Could offer output options for machine cycle vs timestamp, etc.
+  - Output:
+    - { "cycle": 1049, "q": 0 }
+    - { "cycle": 1049, "n": 3, "bus": "0x8f" }
+    - { "cycle": 1049, "bus": "0x8f" } (dma out)
+  - Input:
+    - { "cycle": 1049", "intr": 0 }
+    - { "cycle": 1049", "dma_in": 0, "bus": "0x8f" }
+    - { "cycle": 1049", "dma_out": 0 }
+    - { "cycle": 1049", "ef1": 1, "ef3": 0 }
+    - { "cycle": 1049", "clear": 0 }
+    - { "cycle": 1049", "wait": 0 }
+
+- Consider overhauling events, now that we have a uart
+
+- CLI subcommands
+  - cosmac_emu run
+    - realtime
+    - exit-after (replaces duration)
+    - cycle-time
+    - break (break immediately)
+    - image
+    - input-events
+    - output-events
+    - layout: mc, elf2k, etc.
+      - custom json file
+      - chips, tick frequency scaling, pin maps, memory write protection
+      - some indication of uart interface for tty
+    - tty: attach local --tty (requires layout to include uart)
+  - cosmac_emu dis [--range] file.bin
+
+- Membership card:
+  - Add blinkenlights, buttons, and 7seg display
+  - Could do this all in the terminal
+
+- Debugger:
+  - Separate from "run", which is headless
+  - How to debug MC vs other layouts?
+
+- Bios unit tests
+  - Use "run" (headless)
+  - Specify maximum duration (in clock/machine cycles)
+  - Test does `OUT 7` to signal completion with status code?
+
+- Coredump
+  - Suspend/resume
+  - Debug
+  - Memory image
+  - CDP1802: state, registers, outputs
+  - UART: state, registers
+  - MC: UART clock, front panel
+
+- CDP1861 emulation (video)
 

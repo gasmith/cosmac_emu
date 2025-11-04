@@ -1,3 +1,5 @@
+//! Cosmac 1802 instruction set
+
 use cosmac_emu_macros::InstrSchema;
 use itertools::Itertools;
 
@@ -21,13 +23,9 @@ pub trait InstrSchema: Sized {
         let disasm = self.disasm();
         format!("{enc:<8} {disasm}")
     }
-    /// Returns the opcode for this instruction, including packed data.
-    fn opcode(&self) -> u8 {
-        self.encode()[0]
-    }
 }
 
-#[derive(Clone, Copy, InstrSchema)]
+#[derive(Debug, Clone, Copy, InstrSchema)]
 pub enum Instr {
     #[schema("00")]
     Idl,

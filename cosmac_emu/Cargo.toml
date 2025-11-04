@@ -1,0 +1,33 @@
+[package]
+name = "cosmac_emu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+byte-unit = "5.1.4"
+cosmac_emu_macros = { path="../cosmac_emu_macros" }
+clap.workspace = true
+ctrlc.workspace = true
+itertools.workspace = true
+nom = { version = "7.1.3", features = ["alloc"] }
+rand.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+flume = "0.11.1"
+tracing.workspace = true
+console = "0.16.1"
+ratatui =  "0.29.0"
+vt100 = "0.15.2"
+color-eyre = "0.6.5"
+chrono = "0.4.42"
+log = "0.4.28"
+rustyline = "17.0.2"
+shlex = "1.3.0"
+
+[dev-dependencies]
+assert_matches = "1.5.0"

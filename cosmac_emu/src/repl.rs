@@ -3,18 +3,13 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use anyhow::anyhow;
 use clap::Parser;
-use clap_repl::ClapEditor;
+use color_eyre::Result;
 use itertools::Itertools;
-use nom::branch::alt;
-use nom::bytes::complete::tag;
-use nom::character::complete::one_of;
-use nom::combinator::{all_consuming, map, map_res, rest};
-use nom::sequence::pair;
-use nom::IResult;
+use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
 
-use crate::args::parse_duration;
+use crate::command::parse_duration;
 use crate::controller::{Controller, Status};
 use crate::event::{InputEvent, ParseEvLog};
 use crate::instr::InstrSchema;
@@ -34,6 +29,11 @@ enum Command {
     },
     #[command(alias = "s")]
     Step {
+        #[arg(default_value = "1")]
+        count: u16,
+    },
+    #[command(alias = "t")]
+    Tick {
         #[arg(default_value = "1")]
         count: u16,
     },
@@ -130,25 +130,17 @@ impl Display for When {
     }
 }
 impl When {
-    fn parse_partial(s: &str) -> IResult<&str, Self> {
-        alt((
-            map(tag("now"), |_| When::Now),
-            map(
-                pair(one_of("@+-"), map_res(rest, |s: &str| parse_duration(s))),
-                |(t, d)| match t {
-                    '@' => When::Absolute(d),
-                    '+' => When::Future(d),
-                    '-' => When::Past(d),
-                    _ => unreachable!(),
-                },
-            ),
-        ))(s)
-    }
-
-    fn parse(s: &str) -> anyhow::Result<Self> {
-        all_consuming(When::parse_partial)(s)
-            .map_err(|e| anyhow!("{e}"))
-            .map(|x| x.1)
+    fn parse(s: &str) -> Result<Self> {
+        if s == "now" {
+            return Ok(When::Now);
+        }
+        let when = match s.chars().next() {
+            Some('@') => When::Absolute(parse_duration(&s[1..])?),
+            Some('+') => When::Future(parse_duration(&s[1..])?),
+            Some('-') => When::Past(parse_duration(&s[1..])?),
+            _ => When::Absolute(parse_duration(s)?),
+        };
+        Ok(when)
     }
 
     fn into_absolute(self, now: Duration) -> Duration {
@@ -189,12 +181,31 @@ fn ctrlc_channel() -> mpsc::Receiver<()> {
 
 pub fn run(controller: &mut Controller) {
     let mut rx = ctrlc_channel();
-    let mut rl = ClapEditor::<Command>::new();
+    let mut rl = DefaultEditor::new().unwrap();
     controller.print_next();
     loop {
-        if let Some(cmd) = rl.read_command() {
-            handle_command(controller, cmd, &mut rx);
+        match rl.readline(">> ") {
+            Ok(line) => {
+                rl.add_history_entry(&line).ok();
+                handle_line(controller, &line, &mut rx);
+            }
+            Err(ReadlineError::Interrupted) => (),
+            Err(ReadlineError::Eof) => break,
+            Err(err) => eprintln!("error: {:?}", err),
         }
+    }
+}
+
+fn handle_line(controller: &mut Controller, line: &str, rx: &mut mpsc::Receiver<()>) {
+    match shlex::split(line) {
+        Some(mut parts) => {
+            parts.insert(0, "".to_string());
+            match Command::try_parse_from(parts) {
+                Ok(c) => handle_command(controller, c, rx),
+                Err(e) => eprintln!("{e}"),
+            }
+        }
+        None => eprintln!("bad quotes: {line}"),
     }
 }
 
@@ -224,10 +235,10 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
             }
         },
         Command::Display => {
-            println!("{}", controller.state())
+            println!("{}", controller.display())
         }
         Command::List { count, addr } => {
-            let mut addr = addr.unwrap_or(controller.state().rp());
+            let mut addr = addr.unwrap_or(controller.cdp1802().rp());
             for _ in 0..count {
                 let bp = if controller.has_breakpoint(addr) {
                     "*"
@@ -235,7 +246,6 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
                     " "
                 };
                 let (listing, size) = controller
-                    .state()
                     .decode_instr(addr)
                     .map_or(("??".into(), 1), |i| (i.listing(), i.size()));
                 println!("{addr:04x} {bp}{listing}");
@@ -243,13 +253,15 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
             }
         }
         Command::Examine { addr, count } => {
-            let mem = controller.state().m.as_slice(addr, count);
+            let addr = addr as usize;
+            let end = addr + count as usize;
+            let mem = &controller.memory().as_slice()[addr..end];
             for (ii, v) in mem.iter().enumerate() {
                 if ii % 8 == 0 {
                     if ii != 0 {
                         println!();
                     }
-                    print!("{:04x}  ", addr + u16::try_from(ii).expect("16-bit"));
+                    print!("{:04x}  ", addr + ii);
                 }
                 print!("{v:02x} ");
             }
@@ -261,15 +273,36 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
                 controller.print_next();
             }
         }
+        Command::Tick { count } => {
+            for _ in 0..count {
+                controller.tick();
+                controller.print_next();
+            }
+        }
         Command::Registers => {
-            controller.state().print_registers();
+            let cdp1802 = controller.cdp1802();
+            println!(
+                "d={d:02x}.{df} p={p:x} x={x:x} t={t:04x}",
+                d = cdp1802.d,
+                df = u8::from(cdp1802.df),
+                p = cdp1802.p,
+                x = cdp1802.x,
+                t = cdp1802.t,
+            );
+            for (n, r) in cdp1802.r.iter().enumerate() {
+                print!("{n:x}={r:04x}");
+                if n % 4 == 3 {
+                    println!();
+                } else {
+                    print!(" ");
+                }
+            }
         }
         Command::BreakpointList => {
             let bps: Vec<_> = controller.breakpoints().iter().sorted_unstable().collect();
             println!("breakpoints:");
             for bp in bps {
                 let listing = controller
-                    .state()
                     .decode_instr(*bp)
                     .map_or("??".into(), |instr| instr.listing());
                 println!("{bp:04x} *{listing}");
@@ -282,15 +315,21 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
             controller.breakpoints_mut().remove(&addr);
         }
         Command::Flags => {
-            controller.state().print_flags();
+            let pins = controller.pins();
+            println!("{pins}");
         }
         Command::PokeFlag { flag } => {
-            let state = controller.state_mut();
-            state.toggle_flag(flag);
-            state.print_flags();
+            let pins = controller.pins_mut();
+            match flag {
+                1 => pins.set_ef1(!pins.get_ef1()),
+                2 => pins.set_ef2(!pins.get_ef2()),
+                3 => pins.set_ef3(!pins.get_ef3()),
+                4 => pins.set_ef4(!pins.get_ef4()),
+                _ => println!("invalid flag"),
+            };
         }
         Command::PokeMem { addr, byte } => {
-            controller.state_mut().m.store(addr, byte);
+            controller.memory_mut().as_mut_slice()[addr as usize] = byte;
         }
         Command::AddInputEvent { event, when } => {
             let offset = when.into_absolute(controller.now());
