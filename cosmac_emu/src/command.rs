@@ -53,9 +53,13 @@ impl Cli {
 #[derive(Subcommand)]
 pub enum Command {
     //Asm(AsmArgs),
+    /// Debugger
     Dbg(DbgArgs),
+    /// Disassembler
     Dis(DisArgs),
+    /// Headless runner
     Run(RunArgs),
+    /// Terminal UI
     Tui(TuiArgs),
 }
 impl Command {
