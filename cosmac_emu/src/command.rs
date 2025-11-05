@@ -16,21 +16,23 @@ use regex::Regex;
 
 use crate::chips::cdp1802::MemoryRange;
 
+mod dbg;
 mod dis;
 mod run;
 mod tui;
 
+use dbg::DbgArgs;
 use dis::DisArgs;
 use run::RunArgs;
 use tui::TuiArgs;
 
 // Do we want to put subcommands here? Not if there are fewer than 5.
 //
-// - Tui
-// - Run (headless)
 // - Assembler
-// - Disassembler
 // - Debugger
+// - Disassembler
+// - Run (headless)
+// - Tui
 //
 // If we have a standalone debugger, we need a way to dump core (possibly triggered, e.g. memory
 // access, instruction, it'd be even cooler if we generated a source map - with our _assembler_).
@@ -50,20 +52,20 @@ impl Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    Tui(TuiArgs),
-    Run(RunArgs),
     //Asm(AsmArgs),
+    Dbg(DbgArgs),
     Dis(DisArgs),
-    //Dbg(DbgArgs),
+    Run(RunArgs),
+    Tui(TuiArgs),
 }
 impl Command {
     pub fn run(self) -> Result<()> {
         match self {
-            Command::Tui(args) => tui::run(args),
-            Command::Run(args) => run::run(args),
             //Command::Asm(_) => todo!(),
+            Command::Dbg(args) => dbg::run(args),
             Command::Dis(args) => dis::run(args),
-            //Command::Dbg(_) => todo!(),
+            Command::Run(args) => run::run(args),
+            Command::Tui(args) => tui::run(args),
         }
     }
 }

@@ -4,14 +4,15 @@ use clap::Parser;
 
 use crate::{
     chips::cdp1802::{Cdp1802, Memory},
-    controller::{Controller, Status},
+    controller::Controller,
     event::InputEventLog,
+    repl,
 };
 
-use super::{CommonRunArgs, parse_duration};
+use super::CommonRunArgs;
 
 #[derive(Parser, Debug)]
-pub struct RunArgs {
+pub struct DbgArgs {
     #[command(flatten)]
     common: CommonRunArgs,
 
@@ -22,13 +23,9 @@ pub struct RunArgs {
     /// An output event log to write on exit.
     #[arg(long)]
     pub output_events: Option<PathBuf>,
-
-    /// Runs until the specified duration, as measured from the controller's clock, then exits.
-    #[arg(long, value_parser=parse_duration)]
-    pub duration: Option<Duration>,
 }
 
-pub fn run(args: RunArgs) -> color_eyre::Result<()> {
+pub fn run(args: DbgArgs) -> color_eyre::Result<()> {
     let memory = Memory::builder()
         .with_capacity(args.common.memory_size)?
         .with_image_args(&args.common.ram)?
@@ -43,13 +40,6 @@ pub fn run(args: RunArgs) -> color_eyre::Result<()> {
         let events = InputEventLog::from_file(path)?;
         controller = controller.with_events(events);
     }
-    while args.duration.is_none_or(|d| controller.now() < d) {
-        if let Status::Idle = controller.step() {
-            break;
-        }
-    }
-    if let Some(path) = args.output_events {
-        controller.write_output_events(&path)?;
-    }
+    repl::run(&mut controller);
     Ok(())
 }
