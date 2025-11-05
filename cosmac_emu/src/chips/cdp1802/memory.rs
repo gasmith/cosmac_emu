@@ -217,7 +217,7 @@ impl Memory {
 
     pub fn get_instr_at(&self, addr: u16) -> Option<Instr> {
         let start = addr as usize;
-        let end = (start + 2).max(self.data.len() - 1);
+        let end = (start + 2).min(self.data.len() - 1);
         if start >= end {
             None
         } else {

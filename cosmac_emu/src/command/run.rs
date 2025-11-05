@@ -4,8 +4,8 @@ use clap::Parser;
 
 use crate::{
     chips::cdp1802::{Cdp1802, Memory},
-    controller::{Controller, Status},
     event::InputEventLog,
+    systems::basic::{BasicSystem, Status},
 };
 
 use super::{CommonRunArgs, parse_duration};
@@ -38,18 +38,18 @@ pub fn run(args: RunArgs) -> color_eyre::Result<()> {
         .build()?;
     let cdp1802 = Cdp1802::default();
     let cycle_time = Duration::from_secs(1) / args.common.clock_freq;
-    let mut controller = Controller::new(cdp1802, memory, cycle_time);
+    let mut system = BasicSystem::new(cdp1802, memory, cycle_time);
     if let Some(path) = args.input_events {
         let events = InputEventLog::from_file(path)?;
-        controller = controller.with_events(events);
+        system = system.with_events(events);
     }
-    while args.duration.is_none_or(|d| controller.now() < d) {
-        if let Status::Idle = controller.step() {
+    while args.duration.is_none_or(|d| system.now() < d) {
+        if let Status::Idle = system.step() {
             break;
         }
     }
     if let Some(path) = args.output_events {
-        controller.write_output_events(&path)?;
+        system.write_output_events(&path)?;
     }
     Ok(())
 }

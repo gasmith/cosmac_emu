@@ -10,9 +10,9 @@ use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 
 use crate::command::parse_duration;
-use crate::controller::{Controller, Status};
 use crate::event::{InputEvent, ParseEvLog};
 use crate::instr::InstrSchema;
+use crate::systems::basic::{BasicSystem, Status};
 
 #[derive(Debug, Clone, Parser)]
 enum Command {
@@ -179,15 +179,15 @@ fn ctrlc_channel() -> mpsc::Receiver<()> {
     rx
 }
 
-pub fn run(controller: &mut Controller) {
-    let mut rx = ctrlc_channel();
+pub fn run(system: &mut BasicSystem) {
     let mut rl = DefaultEditor::new().unwrap();
-    controller.print_next();
+    let mut ctrlc = ctrlc_channel();
+    system.print_next_tick();
     loop {
         match rl.readline(">> ") {
             Ok(line) => {
                 rl.add_history_entry(&line).ok();
-                handle_line(controller, &line, &mut rx);
+                handle_line(system, &line, &mut ctrlc);
             }
             Err(ReadlineError::Interrupted) => (),
             Err(ReadlineError::Eof) => break,
@@ -196,12 +196,12 @@ pub fn run(controller: &mut Controller) {
     }
 }
 
-fn handle_line(controller: &mut Controller, line: &str, rx: &mut mpsc::Receiver<()>) {
+fn handle_line(system: &mut BasicSystem, line: &str, ctrlc: &mut mpsc::Receiver<()>) {
     match shlex::split(line) {
         Some(mut parts) => {
             parts.insert(0, "".to_string());
             match Command::try_parse_from(parts) {
-                Ok(c) => handle_command(controller, c, rx),
+                Ok(c) => handle_command(system, c, ctrlc),
                 Err(e) => eprintln!("{e}"),
             }
         }
@@ -209,20 +209,28 @@ fn handle_line(controller: &mut Controller, line: &str, rx: &mut mpsc::Receiver<
     }
 }
 
-fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Receiver<()>) {
+fn step(system: &mut BasicSystem) -> Status {
+    let mut status = system.tick();
+    while !system.cpu().is_fetch_tick0() && matches!(status, Status::Ready) {
+        system.maybe_print_next_event();
+        status = system.tick();
+    }
+    system.print_next_tick();
+    status
+}
+
+fn handle_command(system: &mut BasicSystem, cmd: Command, ctrlc: &mut mpsc::Receiver<()>) {
     match cmd {
         Command::Reset => {
-            controller.reset();
-            controller.print_next();
+            system.reset();
+            system.print_next_tick();
         }
         Command::Continue => loop {
-            if rx.try_recv().is_ok() {
+            if ctrlc.try_recv().is_ok() {
                 println!("interrupted");
                 break;
             }
-            let status = controller.step();
-            controller.print_next();
-            match status {
+            match step(system) {
                 Status::Breakpoint => {
                     println!("breakpoint");
                     break;
@@ -235,18 +243,19 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
             }
         },
         Command::Display => {
-            println!("{}", controller.display())
+            println!("{}", system.display())
         }
         Command::List { count, addr } => {
-            let mut addr = addr.unwrap_or(controller.cdp1802().rp());
+            let mut addr = addr.unwrap_or(system.cdp1802().rp());
             for _ in 0..count {
-                let bp = if controller.has_breakpoint(addr) {
+                let bp = if system.has_breakpoint(addr) {
                     "*"
                 } else {
                     " "
                 };
-                let (listing, size) = controller
-                    .decode_instr(addr)
+                let (listing, size) = system
+                    .memory()
+                    .get_instr_at(addr)
                     .map_or(("??".into(), 1), |i| (i.listing(), i.size()));
                 println!("{addr:04x} {bp}{listing}");
                 addr += u16::from(size);
@@ -255,7 +264,7 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
         Command::Examine { addr, count } => {
             let addr = addr as usize;
             let end = addr + count as usize;
-            let mem = &controller.memory().as_slice()[addr..end];
+            let mem = &system.memory().as_slice()[addr..end];
             for (ii, v) in mem.iter().enumerate() {
                 if ii % 8 == 0 {
                     if ii != 0 {
@@ -269,18 +278,17 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
         }
         Command::Step { count } => {
             for _ in 0..count {
-                controller.step();
-                controller.print_next();
+                step(system);
             }
         }
         Command::Tick { count } => {
             for _ in 0..count {
-                controller.tick();
-                controller.print_next();
+                system.tick();
+                system.print_next_tick();
             }
         }
         Command::Registers => {
-            let cdp1802 = controller.cdp1802();
+            let cdp1802 = system.cdp1802();
             println!(
                 "d={d:02x}.{df} p={p:x} x={x:x} t={t:04x}",
                 d = cdp1802.d,
@@ -299,27 +307,28 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
             }
         }
         Command::BreakpointList => {
-            let bps: Vec<_> = controller.breakpoints().iter().sorted_unstable().collect();
+            let bps: Vec<_> = system.breakpoints().iter().sorted_unstable().collect();
             println!("breakpoints:");
             for bp in bps {
-                let listing = controller
-                    .decode_instr(*bp)
+                let listing = system
+                    .memory()
+                    .get_instr_at(*bp)
                     .map_or("??".into(), |instr| instr.listing());
                 println!("{bp:04x} *{listing}");
             }
         }
         Command::BreakpointSet { addr } => {
-            controller.breakpoints_mut().insert(addr);
+            system.breakpoints_mut().insert(addr);
         }
         Command::BreakpointClear { addr } => {
-            controller.breakpoints_mut().remove(&addr);
+            system.breakpoints_mut().remove(&addr);
         }
         Command::Flags => {
-            let pins = controller.pins();
+            let pins = system.pins();
             println!("{pins}");
         }
         Command::PokeFlag { flag } => {
-            let pins = controller.pins_mut();
+            let pins = system.pins_mut();
             match flag {
                 1 => pins.set_ef1(!pins.get_ef1()),
                 2 => pins.set_ef2(!pins.get_ef2()),
@@ -329,20 +338,20 @@ fn handle_command(controller: &mut Controller, cmd: Command, rx: &mut mpsc::Rece
             };
         }
         Command::PokeMem { addr, byte } => {
-            controller.memory_mut().as_mut_slice()[addr as usize] = byte;
+            system.memory_mut().as_mut_slice()[addr as usize] = byte;
         }
         Command::AddInputEvent { event, when } => {
-            let offset = when.into_absolute(controller.now());
-            controller.add_event(event, offset);
+            let offset = when.into_absolute(system.now());
+            system.add_event(event, offset);
         }
         Command::ExtendInputEvents { path, when } => {
-            let offset = when.into_absolute(controller.now());
-            if let Err(e) = controller.extend_events(path, offset) {
+            let offset = when.into_absolute(system.now());
+            if let Err(e) = system.extend_events(path, offset) {
                 eprintln!("{e}");
             }
         }
-        Command::ListInputEvents => controller.print_input_events(),
-        Command::ClearInputEvents => controller.events_mut().clear(),
-        Command::ListOutputEvents => controller.print_output_events(),
+        Command::ListInputEvents => system.print_input_events(),
+        Command::ClearInputEvents => system.events_mut().clear(),
+        Command::ListOutputEvents => system.print_output_events(),
     }
 }

@@ -77,7 +77,7 @@ struct CommonRunArgs {
     /// By default the image is loaded at base address 0x0000. To load an image at an alternative
     /// base address, specify the image as `<path>@0x8000`. RAM images are loaded in the order they
     /// are provided on the command line. RAM images are loaded before ROM images.
-    #[arg(short, long, value_parser=parse_ram_image)]
+    #[arg(long, value_parser=parse_ram_image)]
     pub ram: Vec<ImageArg>,
 
     /// ROM image file to load.
@@ -88,7 +88,7 @@ struct CommonRunArgs {
     ///
     /// ROM images are automatically write-protected, as if the user had given the --write-protect
     /// option.
-    #[arg(short, long, value_parser=parse_rom_image)]
+    #[arg(long, value_parser=parse_rom_image)]
     pub rom: Vec<ImageArg>,
 
     /// Write protect region. May be provided multiple times.

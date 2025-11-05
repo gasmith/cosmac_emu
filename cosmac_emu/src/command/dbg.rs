@@ -4,9 +4,9 @@ use clap::Parser;
 
 use crate::{
     chips::cdp1802::{Cdp1802, Memory},
-    controller::Controller,
+    debugger,
     event::InputEventLog,
-    repl,
+    systems::basic::BasicSystem,
 };
 
 use super::CommonRunArgs;
@@ -35,11 +35,11 @@ pub fn run(args: DbgArgs) -> color_eyre::Result<()> {
         .build()?;
     let cdp1802 = Cdp1802::default();
     let cycle_time = Duration::from_secs(1) / args.common.clock_freq;
-    let mut controller = Controller::new(cdp1802, memory, cycle_time);
+    let mut system = BasicSystem::new(cdp1802, memory, cycle_time);
     if let Some(path) = args.input_events {
         let events = InputEventLog::from_file(path)?;
-        controller = controller.with_events(events);
+        system = system.with_events(events);
     }
-    repl::run(&mut controller);
+    debugger::run(&mut system);
     Ok(())
 }

@@ -1,4 +1,4 @@
-//! The main controller.
+//! A basic CDP1802 system.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -11,7 +11,7 @@ use crate::chips::cdp1802::{Cdp1802, Cdp1802Pins, Memory};
 use crate::event::{
     EventLog, Flag, InputEvent, InputEventLog, OutputEvent, OutputEventLog, Port, Timed,
 };
-use crate::instr::{Instr, InstrSchema};
+use crate::instr::InstrSchema;
 
 #[derive(Debug, Clone, Copy, Hash)]
 pub enum Status {
@@ -21,7 +21,7 @@ pub enum Status {
     Breakpoint,
 }
 
-pub struct Controller {
+pub struct BasicSystem {
     cpu: Cdp1802,
     memory: Memory,
     pins: Cdp1802Pins,
@@ -33,7 +33,7 @@ pub struct Controller {
     output_events: OutputEventLog,
     breakpoints: HashSet<u16>,
 }
-impl Controller {
+impl BasicSystem {
     pub fn new(cdp1802: Cdp1802, memory: Memory, clock_cycle_time: Duration) -> Self {
         let mut this = Self {
             cpu: cdp1802,
@@ -208,25 +208,38 @@ impl Controller {
         }
     }
 
-    pub fn print_next(&self) {
+    pub fn maybe_print_next_event(&self) {
+        self.print_next(false)
+    }
+
+    pub fn print_next_tick(&self) {
+        self.print_next(true)
+    }
+
+    pub fn print_next(&self, tick: bool) {
         let mc = self.machine_cycle;
-        print!("{mc:08x} ");
         let time = self.now();
         if let Some(e) = self.input_events.peek_next_at(time) {
-            println!("Event: {e:?}");
-        } else {
-            println!("{}", self.display());
+            println!("{mc:08x} Event: {e:?}");
+        } else if tick {
+            println!("{mc:08x} {}", self.display());
         }
     }
 
     pub fn display(&self) -> String {
         let listing = if self.cpu.is_fetch_tick0() {
             let pc = self.cpu.rp();
-            self.decode_instr(pc).map_or("??".into(), |i| i.listing())
+            self.memory
+                .get_instr_at(pc)
+                .map_or("??".into(), |i| i.listing())
         } else {
             "".into()
         };
         format!("{}  {}", self.cpu, listing)
+    }
+
+    pub fn cpu(&self) -> &Cdp1802 {
+        &self.cpu
     }
 
     pub fn memory(&self) -> &Memory {
@@ -235,11 +248,6 @@ impl Controller {
 
     pub fn memory_mut(&mut self) -> &mut Memory {
         &mut self.memory
-    }
-
-    pub fn decode_instr(&self, addr: u16) -> Option<Instr> {
-        let addr = addr as usize;
-        Instr::decode(&self.memory.as_slice()[addr..addr + 3])
     }
 
     pub fn pins(&self) -> Cdp1802Pins {
