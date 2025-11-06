@@ -214,10 +214,6 @@ impl Cdp1802 {
         }
     }
 
-    pub fn is_tick0(&self) -> bool {
-        self.state.tick() == 0
-    }
-
     pub fn rp(&self) -> u16 {
         self.r[self.p as usize]
     }

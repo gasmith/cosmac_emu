@@ -182,7 +182,7 @@ fn ctrlc_channel() -> mpsc::Receiver<()> {
 pub fn run(system: &mut BasicSystem) {
     let mut rl = DefaultEditor::new().unwrap();
     let mut ctrlc = ctrlc_channel();
-    system.print_next_tick();
+    system.print_next_cpu();
     loop {
         match rl.readline(">> ") {
             Ok(line) => {
@@ -215,7 +215,7 @@ fn step(system: &mut BasicSystem) -> Status {
         system.maybe_print_next_event();
         status = system.tick();
     }
-    system.print_next_tick();
+    system.print_next_cpu();
     status
 }
 
@@ -223,7 +223,7 @@ fn handle_command(system: &mut BasicSystem, cmd: Command, ctrlc: &mut mpsc::Rece
     match cmd {
         Command::Reset => {
             system.reset();
-            system.print_next_tick();
+            system.print_next_cpu();
         }
         Command::Continue => loop {
             if ctrlc.try_recv().is_ok() {
@@ -284,7 +284,7 @@ fn handle_command(system: &mut BasicSystem, cmd: Command, ctrlc: &mut mpsc::Rece
         Command::Tick { count } => {
             for _ in 0..count {
                 system.tick();
-                system.print_next_tick();
+                system.print_next_cpu();
             }
         }
         Command::Registers => {

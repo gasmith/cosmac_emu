@@ -27,8 +27,6 @@ pub struct BasicSystem {
     pins: Cdp1802Pins,
     clock_cycle_time: Duration,
     clock_cycle: u64,
-    machine_cycle_time: Duration,
-    machine_cycle: u64,
     input_events: InputEventLog,
     output_events: OutputEventLog,
     breakpoints: HashSet<u16>,
@@ -41,8 +39,6 @@ impl BasicSystem {
             pins: Cdp1802Pins::default(),
             clock_cycle_time,
             clock_cycle: 0,
-            machine_cycle_time: clock_cycle_time * 8,
-            machine_cycle: 0,
             input_events: InputEventLog::default(),
             output_events: OutputEventLog::default(),
             breakpoints: HashSet::default(),
@@ -65,7 +61,6 @@ impl BasicSystem {
             self.cpu.tick(&mut self.pins);
         }
         self.clock_cycle = 0;
-        self.machine_cycle = 0;
         self.input_events.reset();
         self.output_events.clear();
     }
@@ -106,16 +101,16 @@ impl BasicSystem {
     pub fn print_input_events(&self) {
         let iter = self.input_events.iter().sorted_unstable_by_key(|e| e.time);
         for Timed { time, event } in iter {
-            let mc = (time.as_secs_f64() / self.machine_cycle_time.as_secs_f64()).trunc() as u64;
-            println!("{mc:08x} {event:?}");
+            let tick = (time.as_secs_f64() / self.clock_cycle_time.as_secs_f64()).trunc() as u64;
+            println!("{tick:08x} {event:?}");
         }
     }
 
     pub fn print_output_events(&self) {
         let iter = self.output_events.iter().sorted_unstable_by_key(|e| e.time);
         for Timed { time, event } in iter {
-            let mc = (time.as_secs_f64() / self.machine_cycle_time.as_secs_f64()).trunc() as u64;
-            println!("{mc:08x} {event:?}");
+            let tick = (time.as_secs_f64() / self.clock_cycle_time.as_secs_f64()).trunc() as u64;
+            println!("{tick:08x} {event:?}");
         }
     }
 
@@ -178,9 +173,6 @@ impl BasicSystem {
         }
 
         self.clock_cycle += 1;
-        if self.cpu.is_tick0() {
-            self.machine_cycle += 1;
-        }
         if self.cpu.is_waiting(self.pins) {
             Status::Idle
         } else if self.cpu.is_fetch_tick0() && self.has_breakpoint(self.cpu.rp()) {
@@ -212,17 +204,17 @@ impl BasicSystem {
         self.print_next(false)
     }
 
-    pub fn print_next_tick(&self) {
+    pub fn print_next_cpu(&self) {
         self.print_next(true)
     }
 
-    pub fn print_next(&self, tick: bool) {
-        let mc = self.machine_cycle;
+    pub fn print_next(&self, cpu: bool) {
+        let tick = self.clock_cycle;
         let time = self.now();
         if let Some(e) = self.input_events.peek_next_at(time) {
-            println!("{mc:08x} Event: {e:?}");
-        } else if tick {
-            println!("{mc:08x} {}", self.display());
+            println!("{tick:08x} Event: {e:?}");
+        } else if cpu {
+            println!("{tick:08x} {}", self.display());
         }
     }
 
