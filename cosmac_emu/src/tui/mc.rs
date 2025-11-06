@@ -261,7 +261,7 @@ impl MembershipCardTui {
     fn poll_mc(&mut self) -> Result<McPollStatus> {
         let status = match self.mc.poll() {
             Some(Status::UartRead) => {
-                match self.mc.uart_read(None) {
+                match self.mc.uart_read() {
                     Ok(byte) => self.terminal.handle_output(byte),
                     Err(err) => log::warn!("uart read: {err}"),
                 }

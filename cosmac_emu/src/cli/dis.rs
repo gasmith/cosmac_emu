@@ -8,7 +8,7 @@ use itertools::Itertools;
 
 use crate::{
     chips::cdp1802::MemoryRange,
-    command::{parse_addr, parse_memory_range},
+    cli::{parse_addr, parse_memory_range},
     instr::{Instr, InstrSchema},
 };
 

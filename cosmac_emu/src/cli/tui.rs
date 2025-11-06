@@ -1,8 +1,9 @@
 use clap::Parser;
 use color_eyre::{Result, eyre};
 
+use crate::chips::ay51013::Ay51013Uart;
 use crate::tui::mc::MembershipCardTui;
-use crate::{chips::cdp1802::Memory, command::parse_addr, systems::mc::MembershipCard};
+use crate::{chips::cdp1802::Memory, cli::parse_addr, systems::mc::MembershipCard};
 
 use super::CommonRunArgs;
 
@@ -54,13 +55,16 @@ pub fn run(args: TuiArgs) -> Result<()> {
         builder = builder.with_image(0, [0xc0, hi, lo]);
     }
     let memory = builder.build()?;
+    let uart = Ay51013Uart::builder()
+        .with_baud(args.uart_baud, args.common.clock_freq)
+        .build();
     let mc = MembershipCard::builder()
         .with_clock_freq(args.common.clock_freq)
         .with_invert_ef3(args.invert_ef3)
         .with_invert_q(args.invert_q)
         .with_memory(memory)
         .with_speed(args.speed)
-        .with_uart_baud(args.uart_baud)
+        .with_uart(uart.into_box())
         .build();
     let tui = MembershipCardTui::new(mc);
     tui.run()

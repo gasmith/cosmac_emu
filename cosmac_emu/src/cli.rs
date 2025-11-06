@@ -26,19 +26,6 @@ use dis::DisArgs;
 use run::RunArgs;
 use tui::TuiArgs;
 
-// Do we want to put subcommands here? Not if there are fewer than 5.
-//
-// - Assembler
-// - Debugger
-// - Disassembler
-// - Run (headless)
-// - Tui
-//
-// If we have a standalone debugger, we need a way to dump core (possibly triggered, e.g. memory
-// access, instruction, it'd be even cooler if we generated a source map - with our _assembler_).
-//
-//
-
 #[derive(Parser)]
 pub struct Cli {
     #[command(subcommand)]

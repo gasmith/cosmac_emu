@@ -9,7 +9,7 @@ use itertools::Itertools;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 
-use crate::command::parse_duration;
+use crate::cli::parse_duration;
 use crate::event::{InputEvent, ParseEvLog};
 use crate::instr::InstrSchema;
 use crate::systems::basic::{BasicSystem, Status};

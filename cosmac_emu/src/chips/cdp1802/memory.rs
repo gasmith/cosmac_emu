@@ -4,7 +4,7 @@ use color_eyre::eyre;
 use rand::prelude::*;
 
 use crate::{
-    command::ImageArg,
+    cli::ImageArg,
     instr::{Instr, InstrSchema as _},
 };
 
