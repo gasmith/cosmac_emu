@@ -206,6 +206,7 @@ impl Cdp1802 {
         matches!(self.state, State::Fetch(0))
     }
 
+    /// Returns the current opcode, if the chip is entering S1.
     pub fn get_exec_opcode(&self) -> Option<u8> {
         if matches!(self.state, State::Execute(0)) {
             Some(self.i << 4 | self.n)

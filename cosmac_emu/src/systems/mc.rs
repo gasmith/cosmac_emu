@@ -1,6 +1,9 @@
 //! Lee Hart's 1802 Membership Card, but with a UART
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
 use crate::{
     chips::cdp1802::{Cdp1802, Cdp1802Pins, Memory},
@@ -8,6 +11,12 @@ use crate::{
     time::TimeTracker,
     uart::{Uart, UartRxError},
 };
+
+/// The length of the execution opcode history, which we use for heuristics.
+///
+/// See [`MembershipCard::is_cpu_waiting_for_uart`] for more details about the value of this
+/// constant.
+const OPCODE_HISTORY_LEN: usize = 104;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Status {
@@ -87,6 +96,7 @@ impl Builder {
             invert_ef3: self.invert_ef3,
             invert_q: self.invert_q,
             last_pc: 0,
+            opcode_history: VecDeque::with_capacity(OPCODE_HISTORY_LEN),
         }
     }
 }
@@ -115,6 +125,7 @@ pub struct MembershipCard {
     invert_ef3: bool,
     invert_q: bool,
     last_pc: u16,
+    opcode_history: VecDeque<u8>,
 }
 impl Default for MembershipCard {
     fn default() -> Self {
@@ -173,7 +184,7 @@ impl MembershipCard {
         // Tick cpu.
         self.cpu.tick(&mut self.cpu_pins);
 
-        // Update last PC.
+        // Update PC.
         if self.cpu.is_fetch_tick0() {
             self.last_pc = self.cpu.rp();
         } else if load {
@@ -190,6 +201,13 @@ impl MembershipCard {
             } else if rp != self.last_pc {
                 self.last_pc = rp;
             }
+        }
+
+        // Update opcode history.
+        if self.front_panel.clear {
+            self.opcode_history.truncate(0);
+        } else if let Some(opcode) = self.cpu.get_exec_opcode() {
+            self.push_opcode_history(opcode);
         }
 
         // Reset /DmaIn in S2.
@@ -232,6 +250,14 @@ impl MembershipCard {
             tt.tick(start.elapsed(), self.tick_duration);
         }
         self.now += self.tick_duration;
+    }
+
+    /// Records the current opcode, if the CPU has just entered S1.
+    fn push_opcode_history(&mut self, opcode: u8) {
+        while self.opcode_history.len() + 1 >= OPCODE_HISTORY_LEN {
+            self.opcode_history.pop_front();
+        }
+        self.opcode_history.push_back(opcode);
     }
 
     /// Reads one byte from the UART.
@@ -277,10 +303,16 @@ impl MembershipCard {
 
     /// Returns true if there is rx data available on the UART.
     ///
-    /// This functino returns true if all of the following conditions are met:
+    /// This function returns true if all of the following conditions are met:
+    ///
+    ///  - The CPU is running.
+    ///  - The system has a UART configured.
+    ///  - The UART has data ready.
     ///
     fn is_uart_rx_ready(&self) -> bool {
-        !self.front_panel.wait && self.uart.as_ref().is_some_and(|uart| uart.is_rx_ready())
+        !self.front_panel.clear
+            && !self.front_panel.wait
+            && self.uart.as_ref().is_some_and(|uart| uart.is_rx_ready())
     }
 
     /// Returns true if the CPU seems to be waiting for data from the UART.
@@ -288,23 +320,39 @@ impl MembershipCard {
     /// This function returns true if all of the following conditions are met:
     ///
     ///  - The CPU is running.
+    ///  - The system has a UART configured.
     ///  - The UART's transmit side is idle.
     ///  - The CPU has just entered S1 and is branching on EF3.
+    ///  - The CPU executed the same branch opcode recently.
     ///
     /// This is an approximation, and it's not perfect. Just because the program is probing the EF
-    /// lines, that doesn't necessarily mean it's in a tight loop waiting for serial data. We could
-    /// try harder to detect a loop, but that's not entirely trivial either. Some programs poll for
-    /// rx data periodically, and use spare cycles to do other work.
+    /// lines, that doesn't necessarily mean it's in a tight loop waiting for serial data. It
+    /// doesn't necessarily have to be a tight loop either. Some programs poll for rx data
+    /// periodically, using spare cycles to do other work.
     ///
-    /// Given the UART baud rate and clock frequency, we could put an upper bound on the number of
-    /// instructions that the device can execute without missing a start symbol. For example,
-    /// suppose the clock is 4MHz, and the baud rate is 2400. A standard S0/S1 cycle takes 16 clock
-    /// cycles. 2_400 / (4_000_000 * 16) = 104 instructions.
+    /// Given the UART baud rate and clock frequency, we can put an upper bound on the number of
+    /// instructions that the device can execute without missing a start symbol. If, for example,
+    /// we presume the clock is 4MHz, and the baud rate is 2400. A standard S0/S1 cycle takes 16
+    /// clock cycles. 4_000_000 / (2_400 * 16) = 104 instructions. This seems like a reasonable
+    /// bound; most ROMs are written for compatibility with slower system clocks, and higher baud
+    /// rates.
     fn is_cpu_waiting_for_uart(&self) -> bool {
-        !self.front_panel.clear
-            && !self.front_panel.wait
-            && self.uart.as_ref().is_some_and(|uart| uart.is_tx_idle())
-            && matches!(self.cpu.get_exec_opcode(), Some(0x36 | 0x3e | 0xc6 | 0xce))
+        if self.front_panel.clear
+            || self.front_panel.wait
+            || !self.uart.as_ref().is_some_and(|uart| uart.is_tx_idle())
+        {
+            return false;
+        }
+        match self.cpu.get_exec_opcode() {
+            Some(opcode @ (0x36 | 0x3e | 0xc6 | 0xce)) => {
+                self.opcode_history
+                    .iter()
+                    .filter(|oc| **oc == opcode)
+                    .count()
+                    > 1
+            }
+            _ => false,
+        }
     }
 
     /// Returns true if there have been changes to the front panel since the last tick.
