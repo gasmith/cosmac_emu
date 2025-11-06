@@ -128,6 +128,31 @@ impl MembershipCard {
         Builder::default()
     }
 
+    /// Returns the value of R[P] the last time the system entered S0.
+    pub fn last_pc(&self) -> u16 {
+        self.last_pc
+    }
+
+    /// Returns a reference to the CPU.
+    pub fn cpu(&self) -> &Cdp1802 {
+        &self.cpu
+    }
+
+    /// Returns a reference to memory.
+    pub fn memory(&self) -> &Memory {
+        &self.memory
+    }
+
+    /// Returns a reference to the front panel.
+    pub fn front_panel(&self) -> &FrontPanel {
+        &self.front_panel
+    }
+
+    /// Returns a mutable reference to the front panel.
+    pub fn front_panel_mut(&mut self) -> &mut FrontPanel {
+        &mut self.front_panel
+    }
+
     /// Ticks the clock.
     pub fn tick(&mut self) {
         let start = Instant::now();
@@ -209,28 +234,6 @@ impl MembershipCard {
         self.now += self.tick_duration;
     }
 
-    pub fn last_pc(&self) -> u16 {
-        self.last_pc
-    }
-
-    pub fn cpu(&self) -> &Cdp1802 {
-        &self.cpu
-    }
-
-    pub fn memory(&self) -> &Memory {
-        &self.memory
-    }
-
-    /// Returns a reference to the front panel.
-    pub fn front_panel(&self) -> &FrontPanel {
-        &self.front_panel
-    }
-
-    /// Returns a mutable reference to the front panel.
-    pub fn front_panel_mut(&mut self) -> &mut FrontPanel {
-        &mut self.front_panel
-    }
-
     /// Reads one byte from the UART.
     pub fn uart_read(&mut self) -> Result<u8, UartRxError> {
         let (result, hold_cycles) = self
@@ -272,6 +275,10 @@ impl MembershipCard {
         }
     }
 
+    /// Returns true if there is rx data available on the UART.
+    ///
+    /// This functino returns true if all of the following conditions are met:
+    ///
     fn is_uart_rx_ready(&self) -> bool {
         !self.front_panel.wait && self.uart.as_ref().is_some_and(|uart| uart.is_rx_ready())
     }
@@ -284,6 +291,15 @@ impl MembershipCard {
     ///  - The UART's transmit side is idle.
     ///  - The CPU has just entered S1 and is branching on EF3.
     ///
+    /// This is an approximation, and it's not perfect. Just because the program is probing the EF
+    /// lines, that doesn't necessarily mean it's in a tight loop waiting for serial data. We could
+    /// try harder to detect a loop, but that's not entirely trivial either. Some programs poll for
+    /// rx data periodically, and use spare cycles to do other work.
+    ///
+    /// Given the UART baud rate and clock frequency, we could put an upper bound on the number of
+    /// instructions that the device can execute without missing a start symbol. For example,
+    /// suppose the clock is 4MHz, and the baud rate is 2400. A standard S0/S1 cycle takes 16 clock
+    /// cycles. 2_400 / (4_000_000 * 16) = 104 instructions.
     fn is_cpu_waiting_for_uart(&self) -> bool {
         !self.front_panel.clear
             && !self.front_panel.wait
