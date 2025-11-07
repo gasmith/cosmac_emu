@@ -2,371 +2,176 @@
 
 use core::time::Duration;
 use std::{
-    cmp::Ordering,
+    cmp::{Ordering, Reverse},
     collections::BinaryHeap,
     fs::File,
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufReader, BufWriter, Read, Write},
     path::Path,
+    str::FromStr,
 };
 
-use color_eyre::{eyre, Result};
-use nom::{
-    branch::alt,
-    bytes::complete::tag,
-    character::complete::{digit1, one_of},
-    combinator::{all_consuming, map, map_res, recognize},
-    multi::many_m_n,
-    sequence::{preceded, separated_pair, tuple},
-    IResult,
-};
+use color_eyre::{Result, eyre};
+use serde::{Deserialize, Serialize};
 
-/// A trait for parsing an object from an evlog line.
-pub trait ParseEvLog: Sized {
-    fn parse_evlog(s: &str) -> IResult<&str, Self>;
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputKind {
+    Q,
+    Io1,
+    Io2,
+    Io3,
+    Io4,
+    Io5,
+    Io6,
+    Io7,
+}
 
-    fn to_evlog(&self) -> String;
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InputKind {
+    Intr,
+    Ef1,
+    Ef2,
+    Ef3,
+    Ef4,
+    Io1,
+    Io2,
+    Io3,
+    Io4,
+    Io5,
+    Io6,
+    Io7,
+}
+impl FromStr for InputKind {
+    type Err = eyre::Error;
 
-    fn from_evlog(s: &str) -> Result<Self> {
-        let (_, event) =
-            all_consuming(Self::parse_evlog)(s).map_err(|e| eyre::eyre!("failed to parse: {e}"))?;
-        Ok(event)
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let kind = match s.to_lowercase().as_str() {
+            "intr" => Self::Intr,
+            "ef1" => Self::Ef1,
+            "ef2" => Self::Ef2,
+            "ef3" => Self::Ef3,
+            "ef4" => Self::Ef4,
+            "io1" => Self::Io1,
+            "io2" => Self::Io2,
+            "io3" => Self::Io3,
+            "io4" => Self::Io4,
+            "io5" => Self::Io5,
+            "io6" => Self::Io6,
+            "io7" => Self::Io7,
+            _ => eyre::bail!("invalid input event kind: {s}"),
+        };
+        Ok(kind)
     }
 }
 
-/// An external flag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Flag {
-    EF1,
-    EF2,
-    EF3,
-    EF4,
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct RawEvent<K> {
+    timestamp_nanos: u64,
+    kind: K,
+    value: u8,
 }
-impl ParseEvLog for Flag {
-    fn parse_evlog(s: &str) -> IResult<&str, Flag> {
-        map(preceded(tag("ef"), one_of("1234")), |c: char| match c {
-            '1' => Flag::EF1,
-            '2' => Flag::EF2,
-            '3' => Flag::EF3,
-            '4' => Flag::EF4,
-            _ => unreachable!(),
-        })(s)
+
+fn read_csv<K>(r: impl Read) -> Result<Vec<Event<K>>>
+where
+    K: for<'de> Deserialize<'de>,
+{
+    let mut reader = csv::ReaderBuilder::new().has_headers(false).from_reader(r);
+    let mut events: Vec<Event<K>> = vec![];
+    for event in reader.deserialize() {
+        let raw: RawEvent<K> = event?;
+        events.push(Event::from(raw));
     }
+    Ok(events)
+}
 
-    fn to_evlog(&self) -> String {
-        match self {
-            Flag::EF1 => "ef1",
-            Flag::EF2 => "ef2",
-            Flag::EF3 => "ef3",
-            Flag::EF4 => "ef4",
-        }
-        .into()
+fn write_csv<K: Serialize + Copy>(w: impl Write, events: &[Event<K>]) -> Result<()> {
+    let mut writer = csv::WriterBuilder::new().has_headers(false).from_writer(w);
+    for event in events {
+        writer.serialize(RawEvent::from(*event))?;
     }
+    writer.flush()?;
+    Ok(())
 }
 
-/// I/O ports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum Port {
-    IO1 = 1,
-    IO2,
-    IO3,
-    IO4,
-    IO5,
-    IO6,
-    IO7,
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Event<K> {
+    pub timestamp: Duration,
+    pub kind: K,
+    pub value: u8,
 }
-impl ParseEvLog for Port {
-    fn parse_evlog(s: &str) -> IResult<&str, Port> {
-        map_res(preceded(tag(",io"), one_of("1234567")), |c: char| {
-            Ok::<Port, eyre::Error>(match c {
-                '1' => Port::IO1,
-                '2' => Port::IO2,
-                '3' => Port::IO3,
-                '4' => Port::IO4,
-                '5' => Port::IO5,
-                '6' => Port::IO6,
-                '7' => Port::IO7,
-                _ => unreachable!(),
-            })
-        })(s)
-    }
-
-    fn to_evlog(&self) -> String {
-        match self {
-            Port::IO1 => "io1",
-            Port::IO2 => "io2",
-            Port::IO3 => "io3",
-            Port::IO4 => "io4",
-            Port::IO5 => "io5",
-            Port::IO6 => "io6",
-            Port::IO7 => "io7",
-        }
-        .into()
-    }
-}
-
-fn parse_bool(s: &str) -> IResult<&str, bool> {
-    map_res(one_of("01"), |c: char| {
-        Ok::<bool, eyre::Error>(match c {
-            '0' => false,
-            '1' => true,
-            _ => unreachable!(),
-        })
-    })(s)
-}
-
-fn parse_hex_byte(s: &str) -> IResult<&str, u8> {
-    map_res(
-        preceded(
-            tag("0x"),
-            recognize(many_m_n(1, 2, one_of("0123456789abcdef"))),
-        ),
-        |s: &str| u8::from_str_radix(s, 16),
-    )(s)
-}
-
-/// An event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InputEvent {
-    /// Raise interrupt line for one instruction cycle.
-    Interrupt,
-    /// Set or clear a flag.
-    Flag { flag: Flag, value: bool },
-    /// Inputs a byte on the specified port.
-    Input { port: Port, value: u8 },
-}
-impl ParseEvLog for InputEvent {
-    fn parse_evlog(s: &str) -> IResult<&str, InputEvent> {
-        let (s, event_type) = alt((tag("int"), tag("flag"), tag("input")))(s)?;
-        match event_type {
-            "int" => Ok((s, InputEvent::Interrupt)),
-            "flag" => map(
-                tuple((
-                    preceded(tag(","), Flag::parse_evlog),
-                    preceded(tag(","), parse_bool),
-                )),
-                |(flag, value)| InputEvent::Flag { flag, value },
-            )(s),
-            "input" => map(
-                tuple((
-                    preceded(tag(","), Port::parse_evlog),
-                    preceded(tag(","), parse_hex_byte),
-                )),
-                |(port, value)| InputEvent::Input { port, value },
-            )(s),
-            _ => unreachable!(),
-        }
-    }
-
-    fn to_evlog(&self) -> String {
-        match self {
-            InputEvent::Interrupt => "int".into(),
-            InputEvent::Flag { flag, value } => {
-                format!("flag,{},{}", flag.to_evlog(), u8::from(*value))
-            }
-            InputEvent::Input { port, value } => format!("input,{},0x{value:02x}", port.to_evlog()),
+impl<K> Event<K> {
+    pub fn new(timestamp: Duration, kind: K, value: u8) -> Self {
+        Self {
+            timestamp,
+            kind,
+            value,
         }
     }
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OutputEvent {
-    /// Sets or resets the Q line.
-    Q { value: bool },
-    /// Outputs a byte on the specified port.
-    Output { port: Port, value: u8 },
-}
-impl ParseEvLog for OutputEvent {
-    fn parse_evlog(s: &str) -> IResult<&str, OutputEvent> {
-        let (s, event_type) = alt((tag("q"), tag("output")))(s)?;
-        match event_type {
-            "q" => map(preceded(tag(","), parse_bool), |value| OutputEvent::Q {
-                value,
-            })(s),
-            "output" => map(
-                tuple((
-                    preceded(tag(","), Port::parse_evlog),
-                    preceded(tag(","), parse_hex_byte),
-                )),
-                |(port, value)| OutputEvent::Output { port, value },
-            )(s),
-            _ => unreachable!(),
-        }
-    }
-
-    fn to_evlog(&self) -> String {
-        match self {
-            OutputEvent::Q { value } => format!("q,{}", u8::from(*value)),
-            OutputEvent::Output { port, value } => {
-                format!("output,{},0x{value:02x}", port.to_evlog())
-            }
+impl<K> From<RawEvent<K>> for Event<K> {
+    fn from(raw: RawEvent<K>) -> Self {
+        Self {
+            timestamp: Duration::from_nanos(raw.timestamp_nanos),
+            kind: raw.kind,
+            value: raw.value,
         }
     }
 }
-impl OutputEvent {
-    pub fn at(self, time: Duration) -> Timed<OutputEvent> {
-        Timed::new(time, self)
+impl<K> From<Event<K>> for RawEvent<K> {
+    fn from(ev: Event<K>) -> Self {
+        Self {
+            timestamp_nanos: ev.timestamp.as_nanos() as u64,
+            kind: ev.kind,
+            value: ev.value,
+        }
     }
 }
-
-/// A timed event.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Timed<E> {
-    /// The relative time at which this event fires.
-    pub time: Duration,
-
-    /// The event itself.
-    pub event: E,
-}
-impl<E> Timed<E> {
-    pub fn new(time: Duration, event: E) -> Self {
-        Self { time, event }
+impl<K> PartialEq for Event<K> {
+    fn eq(&self, other: &Self) -> bool {
+        self.timestamp == other.timestamp
     }
 }
-impl<E> From<E> for Timed<E> {
-    fn from(event: E) -> Self {
-        Timed::new(Duration::ZERO, event)
-    }
-}
-impl<E: ParseEvLog> ParseEvLog for Timed<E> {
-    fn parse_evlog(s: &str) -> IResult<&str, Self> {
-        map(
-            separated_pair(
-                map_res(digit1, |t: &str| t.parse().map(Duration::from_nanos)),
-                tag(","),
-                E::parse_evlog,
-            ),
-            |(time, event)| Self { time, event },
-        )(s)
-    }
-
-    fn to_evlog(&self) -> String {
-        format!("{},{}", self.time.as_nanos(), self.event.to_evlog())
-    }
-}
-impl<E: Eq + PartialEq> PartialOrd for Timed<E> {
+impl<K> Eq for Event<K> {}
+impl<K> PartialOrd for Event<K> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-impl<E: Eq> Ord for Timed<E> {
+impl<K> Ord for Event<K> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.time.cmp(&other.time).reverse()
+        self.timestamp.cmp(&other.timestamp)
     }
 }
 
-/// An event log.
-#[derive(Debug, Clone)]
-pub struct EventLog<E> {
-    /// A stream of events, in no particular order.
-    events: Vec<Timed<E>>,
-}
-impl<E> Default for EventLog<E> {
-    fn default() -> Self {
-        Self { events: vec![] }
-    }
-}
-impl<E: ParseEvLog> EventLog<E> {
-    fn from_evlog_reader<R: Read>(reader: R) -> Result<Self> {
-        let br = BufReader::new(reader);
-        let mut events = vec![];
-        for line in br.lines() {
-            let line = line?;
-            let event = ParseEvLog::from_evlog(&line)?;
-            events.push(event);
-        }
-        Ok(Self { events })
-    }
-
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let file = File::open(path)?;
-        Self::from_evlog_reader(file)
-    }
-
-    pub fn write_to_evlog_writer<W: Write>(&self, mut writer: W) -> Result<()> {
-        for event in &self.events {
-            writeln!(writer, "{}", event.to_evlog())?;
-        }
-        Ok(())
-    }
-
-    pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let file = File::create(path)?;
-        self.write_to_evlog_writer(file)
-    }
-
-    /// Appends an event to the log. The caller is responsible for ordering.
-    pub fn push(&mut self, event: Timed<E>) {
-        self.events.push(event)
-    }
-
-    /// Clears the log.
-    pub fn clear(&mut self) {
-        self.events.clear();
-    }
-
-    /// Iterates over all events in the log, in no particular order.
-    pub fn iter(&self) -> impl Iterator<Item = &Timed<E>> {
-        self.events.iter()
-    }
-}
-
-impl<E> IntoIterator for EventLog<E> {
-    type Item = Timed<E>;
-
-    type IntoIter = std::vec::IntoIter<Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.events.into_iter()
-    }
-}
+pub type InputEvent = Event<InputKind>;
 
 /// An input event log.
 #[derive(Debug, Default, Clone)]
 pub struct InputEventLog {
     /// Pending events in a min-heap.
-    pending: BinaryHeap<Timed<InputEvent>>,
+    pending: BinaryHeap<Reverse<InputEvent>>,
 
     /// Expired events, in no particular order.
-    expired: Vec<Timed<InputEvent>>,
-}
-impl From<EventLog<InputEvent>> for InputEventLog {
-    fn from(log: EventLog<InputEvent>) -> Self {
-        let pending: BinaryHeap<_> = log.events.into_iter().collect();
-        let expired = Vec::with_capacity(pending.len());
-        InputEventLog { pending, expired }
-    }
+    expired: Vec<InputEvent>,
 }
 impl InputEventLog {
     /// Reads an input event log from a file path.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
-        EventLog::from_file(path).map(Self::from)
+        let file = BufReader::new(File::open(path)?);
+        let events = read_csv(file)?;
+        let expired = Vec::with_capacity(events.len());
+        let pending = events.into_iter().map(Reverse).collect();
+        Ok(Self { pending, expired })
     }
 
-    /// Adds a new event to the event log, with the specified `offset`. An event that occured
-    /// before `now` is treated as expired, whereas an event that occurs at or after `now` is
-    /// treated as pending.
-    pub fn add<E: Into<Timed<InputEvent>>>(&mut self, event: E, offset: Duration, now: Duration) {
-        let mut event = event.into();
-        event.time += offset;
-        if event.time < now {
+    /// Adds a new event to the event log. An event that occurred before `now` is treated as
+    /// expired, whereas an event that occurs at or after `now` is treated as pending.
+    pub fn add(&mut self, event: InputEvent, now: Duration) {
+        if event.timestamp < now {
             self.expired.push(event);
         } else {
-            self.pending.push(event);
-        }
-    }
-
-    /// Merges new events into the event log, with the specified `offset`. Events that occured
-    /// before `now` are treated as expired, whereas events that occur at or after `now` are
-    /// treated as pending.
-    pub fn extend<E: Into<Timed<InputEvent>>, I: IntoIterator<Item = E>>(
-        &mut self,
-        events: I,
-        offset: Duration,
-        now: Duration,
-    ) {
-        for event in events {
-            self.add(event, offset, now);
+            self.pending.push(Reverse(event));
         }
     }
 
@@ -376,23 +181,24 @@ impl InputEventLog {
         self.pending.clear();
     }
 
-    /// Peeks at the next pending event.
-    pub fn peek_next_at(&self, time: Duration) -> Option<&InputEvent> {
-        self.pending
-            .peek()
-            .filter(|e| e.time <= time)
-            .as_ref()
-            .map(|e| &e.event)
+    /// Peeks at the next pending event that expires before `when`.
+    pub fn peek_next_at(&self, when: Duration) -> Option<InputEvent> {
+        self.pending.peek().and_then(|e| {
+            if e.0.timestamp <= when {
+                Some(e.0)
+            } else {
+                None
+            }
+        })
     }
 
-    /// Pops the next pending event.
-    pub fn pop_next_at(&mut self, time: Duration) -> Option<InputEvent> {
+    /// Pops the next pending event that expires before `when`.
+    pub fn pop_next_at(&mut self, when: Duration) -> Option<InputEvent> {
         match self.pending.peek() {
-            Some(e) if e.time <= time => {
+            Some(e) if e.0.timestamp <= when => {
                 let e = self.pending.pop().unwrap();
-                let ev = e.event;
-                self.expired.push(e);
-                Some(ev)
+                self.expired.push(e.0);
+                Some(e.0)
             }
             _ => None,
         }
@@ -401,14 +207,41 @@ impl InputEventLog {
     /// Moves all expired events back into the pending heap.
     pub fn reset(&mut self) {
         for e in self.expired.drain(..).rev() {
-            self.pending.push(e)
+            self.pending.push(Reverse(e))
         }
     }
 
     /// Iterates over all events in the log, in no particular order.
-    pub fn iter(&self) -> impl Iterator<Item = &Timed<InputEvent>> {
-        self.expired.iter().chain(self.pending.iter())
+    pub fn iter(&self) -> impl Iterator<Item = InputEvent> {
+        self.expired
+            .iter()
+            .copied()
+            .chain(self.pending.iter().map(|e| e.0))
     }
 }
 
-pub type OutputEventLog = EventLog<OutputEvent>;
+pub type OutputEvent = Event<OutputKind>;
+
+#[derive(Default)]
+pub struct OutputEventLog(Vec<OutputEvent>);
+impl OutputEventLog {
+    pub fn to_file(&self, path: impl AsRef<Path>) -> Result<()> {
+        let file = BufWriter::new(File::create(path)?);
+        write_csv(file, &self.0)
+    }
+
+    /// Adds an event to the event log.
+    pub fn push(&mut self, event: OutputEvent) {
+        self.0.push(event);
+    }
+
+    /// Removes all events from the log.
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    /// Iterates over all events in the log, in no particular order.
+    pub fn iter(&self) -> impl Iterator<Item = OutputEvent> {
+        self.0.iter().copied()
+    }
+}

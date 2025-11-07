@@ -5,12 +5,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use color_eyre::Result;
-use itertools::Itertools;
 
 use crate::chips::cdp1802::{Cdp1802, Cdp1802Pins, Memory};
-use crate::event::{
-    EventLog, Flag, InputEvent, InputEventLog, OutputEvent, OutputEventLog, Port, Timed,
-};
+use crate::event::{InputEvent, InputEventLog, InputKind, OutputEvent, OutputEventLog, OutputKind};
 use crate::instr::InstrSchema;
 
 #[derive(Debug, Clone, Copy, Hash)]
@@ -86,36 +83,40 @@ impl BasicSystem {
             .saturating_mul(u32::try_from(self.clock_cycle).unwrap_or(u32::MAX))
     }
 
-    pub fn add_event(&mut self, event: InputEvent, offset: Duration) {
+    pub fn add_event(&mut self, event: InputEvent) {
         let now = self.now();
-        self.input_events.add(event, offset, now);
+        self.input_events.add(event, now);
     }
 
-    pub fn extend_events<P: AsRef<Path>>(&mut self, path: P, offset: Duration) -> Result<()> {
-        let log = EventLog::from_file(path)?;
+    pub fn extend_events(&mut self, path: impl AsRef<Path>) -> Result<()> {
+        let log = InputEventLog::from_file(path)?;
         let now = self.now();
-        self.input_events.extend(log, offset, now);
+        for event in log.iter() {
+            self.input_events.add(event, now);
+        }
         Ok(())
     }
 
     pub fn print_input_events(&self) {
-        let iter = self.input_events.iter().sorted_unstable_by_key(|e| e.time);
-        for Timed { time, event } in iter {
-            let tick = (time.as_secs_f64() / self.clock_cycle_time.as_secs_f64()).trunc() as u64;
-            println!("{tick:08x} {event:?}");
+        let mut events: Vec<_> = self.input_events.iter().collect();
+        events.sort_unstable();
+        for event in events {
+            let tick = (event.timestamp.as_secs_f64() / self.clock_cycle_time.as_secs_f64()) as u64;
+            println!("{tick:08x} {:?} {}", event.kind, event.value);
         }
     }
 
     pub fn print_output_events(&self) {
-        let iter = self.output_events.iter().sorted_unstable_by_key(|e| e.time);
-        for Timed { time, event } in iter {
-            let tick = (time.as_secs_f64() / self.clock_cycle_time.as_secs_f64()).trunc() as u64;
-            println!("{tick:08x} {event:?}");
+        let mut events: Vec<_> = self.output_events.iter().collect();
+        events.sort_unstable();
+        for event in events {
+            let tick = (event.timestamp.as_secs_f64() / self.clock_cycle_time.as_secs_f64()) as u64;
+            println!("{tick:08x} {:?} {}", event.kind, event.value);
         }
     }
 
     pub fn write_output_events<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        self.output_events.write_to_file(path)
+        self.output_events.to_file(path)
     }
 
     pub fn events_mut(&mut self) -> &mut InputEventLog {
@@ -149,25 +150,32 @@ impl BasicSystem {
 
         let q = self.pins.get_q();
         if q != q_prev {
-            self.output_events.push(OutputEvent::Q { value: q }.at(now))
+            self.output_events.push(OutputEvent {
+                timestamp: now,
+                kind: OutputKind::Q,
+                value: q as u8,
+            });
         }
 
         // Output data strobe.
         match (self.pins.get_mrd(), self.pins.get_tpb(), self.pins.get_n()) {
             (false, true, n) if n > 0 => {
-                let port = match n {
-                    1 => Port::IO1,
-                    2 => Port::IO2,
-                    3 => Port::IO3,
-                    4 => Port::IO4,
-                    5 => Port::IO5,
-                    6 => Port::IO6,
-                    7 => Port::IO7,
+                let kind = match n {
+                    1 => OutputKind::Io1,
+                    2 => OutputKind::Io2,
+                    3 => OutputKind::Io3,
+                    4 => OutputKind::Io4,
+                    5 => OutputKind::Io5,
+                    6 => OutputKind::Io6,
+                    7 => OutputKind::Io7,
                     _ => unreachable!(),
                 };
                 let value = self.pins.get_bus();
-                self.output_events
-                    .push(OutputEvent::Output { port, value }.at(now))
+                self.output_events.push(OutputEvent {
+                    timestamp: now,
+                    kind,
+                    value,
+                })
             }
             _ => (),
         }
@@ -183,20 +191,30 @@ impl BasicSystem {
     }
 
     fn apply_event(&mut self, e: InputEvent) {
-        match e {
-            InputEvent::Interrupt => self.pins.set_intr(false),
-            InputEvent::Flag { flag, value } => match flag {
-                Flag::EF1 => self.pins.set_ef1(value),
-                Flag::EF2 => self.pins.set_ef2(value),
-                Flag::EF3 => self.pins.set_ef3(value),
-                Flag::EF4 => self.pins.set_ef4(value),
-            },
-            InputEvent::Input { port, value } => {
-                let select = self.pins.get_n();
-                if select == port as u8 {
-                    self.pins.set_bus(value);
-                }
-            }
+        match e.kind {
+            InputKind::Intr => self.pins.set_intr(e.value > 0),
+            InputKind::Ef1 => self.pins.set_ef1(e.value > 0),
+            InputKind::Ef2 => self.pins.set_ef2(e.value > 0),
+            InputKind::Ef3 => self.pins.set_ef3(e.value > 0),
+            InputKind::Ef4 => self.pins.set_ef4(e.value > 0),
+            _ => self.apply_io_port_event(e),
+        }
+    }
+
+    fn apply_io_port_event(&mut self, e: InputEvent) {
+        if self.pins.get_mrd()
+            && matches!(
+                (e.kind, self.pins.get_n()),
+                (InputKind::Io1, 1)
+                    | (InputKind::Io2, 2)
+                    | (InputKind::Io3, 3)
+                    | (InputKind::Io4, 4)
+                    | (InputKind::Io5, 5)
+                    | (InputKind::Io6, 6)
+                    | (InputKind::Io7, 7)
+            )
+        {
+            self.pins.set_bus(e.value);
         }
     }
 
@@ -212,7 +230,7 @@ impl BasicSystem {
         let tick = self.clock_cycle;
         let time = self.now();
         if let Some(e) = self.input_events.peek_next_at(time) {
-            println!("{tick:08x} Event: {e:?}");
+            println!("{tick:08x} Event: {:?} {}", e.kind, e.value);
         } else if cpu {
             println!("{tick:08x} {}", self.display());
         }

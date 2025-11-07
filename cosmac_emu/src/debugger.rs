@@ -1,16 +1,17 @@
 use std::fmt::Display;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::mpsc;
 use std::time::Duration;
 
 use clap::Parser;
-use color_eyre::Result;
+use color_eyre::{Result, eyre};
 use itertools::Itertools;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 
 use crate::cli::parse_duration;
-use crate::event::{InputEvent, ParseEvLog};
+use crate::event::{InputEvent, InputKind};
 use crate::instr::InstrSchema;
 use crate::systems::basic::{BasicSystem, Status};
 
@@ -74,18 +75,17 @@ enum Command {
     /// Adds a single event.
     #[command(alias = "ie")]
     AddInputEvent {
-        /// The event, in evlog form.
-        ///
-        /// Examples:
-        ///  - int
-        ///  - flag,ef[1-4],[01]
-        ///  - input,io[1-7],0x[0-1a-f]
-        #[arg(value_parser=InputEvent::from_evlog, verbatim_doc_comment)]
-        event: InputEvent,
+        /// The event kind.
+        #[arg()]
+        kind: InputKind,
+
+        /// The event value.
+        #[arg(value_parser=parse_hex_u8)]
+        value: u8,
 
         /// The offset from the start of execution, in nanoseconds. If not specified, defaults to
         /// "now", i.e. nanoseconds since the last reset.
-        #[arg(value_parser=When::parse, default_value_t=When::Now)]
+        #[arg(default_value_t=When::Now)]
         when: When,
     },
     /// Adds events from the specified log file.
@@ -94,11 +94,6 @@ enum Command {
         /// Path to the event log file.
         #[arg()]
         path: PathBuf,
-
-        /// The offset from the start of execution, in nanoseconds. If not specified, defaults to
-        /// "now", i.e. nanoseconds since the last reset.
-        #[arg(value_parser=When::parse, default_value_t=When::Now)]
-        when: When,
     },
     /// Lists events.
     #[command(alias = "lie")]
@@ -129,8 +124,10 @@ impl Display for When {
         }
     }
 }
-impl When {
-    fn parse(s: &str) -> Result<Self> {
+impl FromStr for When {
+    type Err = eyre::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         if s == "now" {
             return Ok(When::Now);
         }
@@ -142,7 +139,8 @@ impl When {
         };
         Ok(when)
     }
-
+}
+impl When {
     fn into_absolute(self, now: Duration) -> Duration {
         match self {
             When::Now => now,
@@ -159,12 +157,20 @@ struct Address {
     addr: u16,
 }
 
-fn parse_hex_u16(arg: &str) -> Result<u16, std::num::ParseIntError> {
-    u16::from_str_radix(arg, 16)
+fn parse_hex_u16(s: &str) -> Result<u16, std::num::ParseIntError> {
+    if let Some(s) = s.strip_prefix("0x") {
+        u16::from_str_radix(s, 16)
+    } else {
+        s.parse()
+    }
 }
 
-fn parse_hex_u8(arg: &str) -> Result<u8, std::num::ParseIntError> {
-    u8::from_str_radix(arg, 16)
+fn parse_hex_u8(s: &str) -> Result<u8, std::num::ParseIntError> {
+    if let Some(s) = s.strip_prefix("0x") {
+        u8::from_str_radix(s, 16)
+    } else {
+        s.parse()
+    }
 }
 
 fn ctrlc_channel() -> mpsc::Receiver<()> {
@@ -340,13 +346,12 @@ fn handle_command(system: &mut BasicSystem, cmd: Command, ctrlc: &mut mpsc::Rece
         Command::PokeMem { addr, byte } => {
             system.memory_mut().as_mut_slice()[addr as usize] = byte;
         }
-        Command::AddInputEvent { event, when } => {
-            let offset = when.into_absolute(system.now());
-            system.add_event(event, offset);
+        Command::AddInputEvent { when, kind, value } => {
+            let timestamp = when.into_absolute(system.now());
+            system.add_event(InputEvent::new(timestamp, kind, value));
         }
-        Command::ExtendInputEvents { path, when } => {
-            let offset = when.into_absolute(system.now());
-            if let Err(e) = system.extend_events(path, offset) {
+        Command::ExtendInputEvents { path } => {
+            if let Err(e) = system.extend_events(path) {
                 eprintln!("{e}");
             }
         }
