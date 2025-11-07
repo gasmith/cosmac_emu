@@ -60,9 +60,6 @@ fn test_reset_to_run() {
     assert_matches!(sys.cpu.state, State::Init(0));
     assert_eq!(sys.cpu.i, 0);
     assert_eq!(sys.cpu.n, 0);
-    assert_eq!(sys.cpu.x, 0);
-    assert_eq!(sys.cpu.p, 0);
-    assert_eq!(sys.cpu.r[0], 0);
     assert!(sys.cpu.ie);
     assert!(!sys.pins.get_q());
     assert_eq!(sys.pins.get_bus(), 0x00);
@@ -79,6 +76,9 @@ fn test_reset_to_run() {
     sys.pins.set_bus(0xff);
     sys.tick();
     assert_matches!(sys.cpu.state, State::Init(1));
+    assert_eq!(sys.cpu.x, 0);
+    assert_eq!(sys.cpu.p, 0);
+    assert_eq!(sys.cpu.r[0], 0);
     assert_eq!(sys.pins.get_bus(), 0x00);
     sys.tick_n(7);
     assert_matches!(sys.cpu.state, State::Init(8));
@@ -120,6 +120,7 @@ fn test_reset_to_load() {
 #[test]
 fn test_n() {
     let mut sys = TestSystem::new();
+    sys.pins.set_clear(false);
     sys.tick();
 
     // n lines are low at all times except for i/o instructions

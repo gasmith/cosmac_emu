@@ -353,7 +353,7 @@ impl Cdp1802 {
     }
 
     fn tick_init(&mut self, tick: u8) {
-        if tick == 1 {
+        if tick == 0 {
             self.x = 0;
             self.p = 0;
             self.r[0] = 0;
