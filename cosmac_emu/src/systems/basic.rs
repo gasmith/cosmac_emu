@@ -7,7 +7,9 @@ use std::time::Duration;
 use color_eyre::Result;
 
 use crate::chips::cdp1802::{Cdp1802, Cdp1802Pins, Memory};
-use crate::event::{InputEvent, InputEventLog, InputKind, OutputEvent, OutputEventLog, OutputKind};
+use crate::event::{
+    Event, InputEvent, InputEventLog, InputKind, OutputEvent, OutputEventLog, OutputKind,
+};
 use crate::instr::InstrSchema;
 
 #[derive(Debug, Clone, Copy, Hash)]
@@ -98,17 +100,16 @@ impl BasicSystem {
     }
 
     pub fn print_input_events(&self) {
-        let mut events: Vec<_> = self.input_events.iter().collect();
-        events.sort_unstable();
-        for event in events {
-            let tick = (event.timestamp.as_secs_f64() / self.clock_cycle_time.as_secs_f64()) as u64;
-            println!("{tick:08x} {:?} {}", event.kind, event.value);
-        }
+        self.print_events(self.input_events.iter())
     }
 
     pub fn print_output_events(&self) {
-        let mut events: Vec<_> = self.output_events.iter().collect();
-        events.sort_unstable();
+        self.print_events(self.output_events.iter())
+    }
+
+    fn print_events<K: std::fmt::Debug>(&self, events: impl Iterator<Item = Event<K>>) {
+        let mut events: Vec<_> = events.collect();
+        events.sort_unstable_by(|a, b| a.timestamp.cmp(&b.timestamp));
         for event in events {
             let tick = (event.timestamp.as_secs_f64() / self.clock_cycle_time.as_secs_f64()) as u64;
             println!("{tick:08x} {:?} {}", event.kind, event.value);
@@ -202,6 +203,8 @@ impl BasicSystem {
     }
 
     fn apply_io_port_event(&mut self, e: InputEvent) {
+        // TODO: This handling doesn't seem quite right. We should store these in registers that
+        // the device can select with the mrd/n pins.
         if self.pins.get_mrd()
             && matches!(
                 (e.kind, self.pins.get_n()),

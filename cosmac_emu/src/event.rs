@@ -2,8 +2,7 @@
 
 use core::time::Duration;
 use std::{
-    cmp::{Ordering, Reverse},
-    collections::BinaryHeap,
+    collections::VecDeque,
     fs::File,
     io::{BufReader, BufWriter, Read, Write},
     path::Path,
@@ -127,30 +126,14 @@ impl<K> From<Event<K>> for RawEvent<K> {
         }
     }
 }
-impl<K> PartialEq for Event<K> {
-    fn eq(&self, other: &Self) -> bool {
-        self.timestamp == other.timestamp
-    }
-}
-impl<K> Eq for Event<K> {}
-impl<K> PartialOrd for Event<K> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl<K> Ord for Event<K> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.timestamp.cmp(&other.timestamp)
-    }
-}
 
 pub type InputEvent = Event<InputKind>;
 
 /// An input event log.
 #[derive(Debug, Default, Clone)]
 pub struct InputEventLog {
-    /// Pending events in a min-heap.
-    pending: BinaryHeap<Reverse<InputEvent>>,
+    /// Pending events, sorted ascending by timestamp.
+    pending: VecDeque<InputEvent>,
 
     /// Expired events, in no particular order.
     expired: Vec<InputEvent>,
@@ -161,8 +144,12 @@ impl InputEventLog {
         let file = BufReader::new(File::open(path)?);
         let events = read_csv(file)?;
         let expired = Vec::with_capacity(events.len());
-        let pending = events.into_iter().map(Reverse).collect();
-        Ok(Self { pending, expired })
+        let mut pending: Vec<_> = events.into_iter().collect();
+        pending.sort_unstable_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        Ok(Self {
+            pending: pending.into_iter().collect(),
+            expired,
+        })
     }
 
     /// Adds a new event to the event log. An event that occurred before `now` is treated as
@@ -171,7 +158,12 @@ impl InputEventLog {
         if event.timestamp < now {
             self.expired.push(event);
         } else {
-            self.pending.push(Reverse(event));
+            match self
+                .pending
+                .binary_search_by(|e| e.timestamp.cmp(&event.timestamp))
+            {
+                Ok(idx) | Err(idx) => self.pending.insert(idx, event),
+            }
         }
     }
 
@@ -183,40 +175,42 @@ impl InputEventLog {
 
     /// Peeks at the next pending event that expires before `when`.
     pub fn peek_next_at(&self, when: Duration) -> Option<InputEvent> {
-        self.pending.peek().and_then(|e| {
-            if e.0.timestamp <= when {
-                Some(e.0)
-            } else {
-                None
-            }
-        })
+        self.pending
+            .front()
+            .filter(|e| e.timestamp <= when)
+            .copied()
     }
 
     /// Pops the next pending event that expires before `when`.
     pub fn pop_next_at(&mut self, when: Duration) -> Option<InputEvent> {
-        match self.pending.peek() {
-            Some(e) if e.0.timestamp <= when => {
-                let e = self.pending.pop().unwrap();
-                self.expired.push(e.0);
-                Some(e.0)
+        match self.pending.front() {
+            Some(e) if e.timestamp <= when => {
+                let e = self.pending.pop_front().unwrap();
+                self.expired.push(e);
+                Some(e)
             }
             _ => None,
         }
     }
 
-    /// Moves all expired events back into the pending heap.
+    /// Moves all expired events back into the sorted pending list.
     pub fn reset(&mut self) {
-        for e in self.expired.drain(..).rev() {
-            self.pending.push(Reverse(e))
+        let mut expired: Vec<_> = self.expired.drain(..).collect();
+        expired.sort_unstable_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        assert!(
+            expired
+                .last()
+                .zip(self.pending.front())
+                .is_none_or(|(e, p)| e.timestamp <= p.timestamp)
+        );
+        for e in expired.into_iter().rev() {
+            self.pending.push_front(e)
         }
     }
 
     /// Iterates over all events in the log, in no particular order.
     pub fn iter(&self) -> impl Iterator<Item = InputEvent> {
-        self.expired
-            .iter()
-            .copied()
-            .chain(self.pending.iter().map(|e| e.0))
+        self.expired.iter().chain(self.pending.iter()).copied()
     }
 }
 
