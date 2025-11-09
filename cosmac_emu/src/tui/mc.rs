@@ -94,6 +94,7 @@ enum McPollStatus {
 enum UiPollStatus {
     Timeout,
     Handled,
+    Resize,
     Noop,
     Exit,
 }
@@ -251,6 +252,7 @@ impl MembershipCardTui {
                         need_input = false;
                         need_redraw = true;
                     }
+                    UiPollStatus::Resize => need_redraw = true,
                     UiPollStatus::Noop => need_input = false,
                     UiPollStatus::Exit => return Ok(()),
                 }
@@ -301,6 +303,7 @@ impl MembershipCardTui {
                 self.handle_key(key);
                 UiPollStatus::Handled
             }
+            Event::Resize(_, _) => UiPollStatus::Resize,
             _ => UiPollStatus::Noop,
         };
         Ok(status)
