@@ -9,9 +9,9 @@ use color_eyre::Result;
 use ratatui::{
     DefaultTerminal, Frame,
     crossterm::event::{self, Event, KeyCode, KeyEvent},
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     text::{Line, Text},
-    widgets::{Block, Borders, Widget},
+    widgets::{Block, Borders, Paragraph, Widget},
 };
 
 use crate::systems::mc::{MembershipCard, Status};
@@ -111,8 +111,42 @@ impl MembershipCardTui {
         }
     }
 
+    fn min_term_size(&self) -> (u16, u16) {
+        let width = 4
+            + TerminalWidget::width()
+            + FrontPanelWidget::width()
+                .max(RegisterWidget::width())
+                .max(ListingWidget::width());
+        let height = 3 + TerminalWidget::height();
+        (width, height)
+    }
+
     pub fn draw(&self, f: &mut Frame) {
         let area = f.area();
+
+        let (min_width, min_height) = self.min_term_size();
+        if area.height < min_height || area.width < min_width {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Percentage(40),
+                    Constraint::Length(7),
+                    Constraint::Percentage(40),
+                ])
+                .split(area);
+            let lines = vec![
+                Line::from("Terminal too small"),
+                Line::from(format!("width={} height={}", area.width, area.height)),
+                Line::from(""),
+                Line::from("Required dimensions"),
+                Line::from(format!("width={min_width} height={min_height}")),
+            ];
+            let text = Paragraph::new(lines)
+                .alignment(Alignment::Center)
+                .block(Block::bordered());
+            f.render_widget(text, chunks[1]);
+            return;
+        }
 
         // Top area (terminal, front panel, registers) and bottom (log buffer)
         let chunks = Layout::default()
@@ -239,14 +273,19 @@ impl MembershipCardTui {
 
             // Poll the UI, if input is needed, and periodically.
             if need_input || self.ui_poll_at <= Instant::now() {
+                // If the terminal is too small, we only accept a subset of events.
+                let (min_width, min_height) = self.min_term_size();
+                let is_term_too_small = terminal
+                    .size()
+                    .is_ok_and(|s| s.width < min_width || s.height < min_height);
                 // If we're waiting for input, and there's no redraw pending, wait indefinitely.
-                let duration = if need_input && !need_redraw {
+                let duration = if is_term_too_small || (need_input && !need_redraw) {
                     Duration::from_secs(60)
                 } else {
                     Duration::default()
                 };
                 self.ui_poll_at = Instant::now() + UI_FREQ;
-                match self.poll_ui(duration)? {
+                match self.poll_ui(duration, is_term_too_small)? {
                     UiPollStatus::Timeout => (),
                     UiPollStatus::Handled => {
                         need_input = false;
@@ -288,22 +327,22 @@ impl MembershipCardTui {
         Ok(status)
     }
 
-    fn poll_ui(&mut self, duration: Duration) -> Result<UiPollStatus> {
+    fn poll_ui(&mut self, duration: Duration, is_term_too_small: bool) -> Result<UiPollStatus> {
         if !event::poll(duration)? {
             return Ok(UiPollStatus::Timeout);
         }
         let event = event::read()?;
-        let status = match event {
-            Event::Key(key) if matches!(key.code, KeyCode::Esc) => UiPollStatus::Exit,
-            Event::Key(key) if matches!(key.code, KeyCode::Tab) => {
+        let status = match (event, is_term_too_small) {
+            (Event::Key(key), _) if matches!(key.code, KeyCode::Esc) => UiPollStatus::Exit,
+            (Event::Key(key), false) if matches!(key.code, KeyCode::Tab) => {
                 self.focus = self.focus.next();
                 UiPollStatus::Handled
             }
-            Event::Key(key) => {
+            (Event::Key(key), false) => {
                 self.handle_key(key);
                 UiPollStatus::Handled
             }
-            Event::Resize(_, _) => UiPollStatus::Resize,
+            (Event::Resize(_, _), _) => UiPollStatus::Resize,
             _ => UiPollStatus::Noop,
         };
         Ok(status)
