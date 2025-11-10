@@ -189,11 +189,12 @@ pub fn run(system: &mut BasicSystem) {
     let mut rl = DefaultEditor::new().unwrap();
     let mut ctrlc = ctrlc_channel();
     system.print_next_cpu();
+    let mut prev_cmd = None;
     loop {
         match rl.readline(">> ") {
             Ok(line) => {
                 rl.add_history_entry(&line).ok();
-                handle_line(system, &line, &mut ctrlc);
+                handle_line(system, &line, &mut prev_cmd, &mut ctrlc);
             }
             Err(ReadlineError::Interrupted) => (),
             Err(ReadlineError::Eof) => break,
@@ -202,12 +203,26 @@ pub fn run(system: &mut BasicSystem) {
     }
 }
 
-fn handle_line(system: &mut BasicSystem, line: &str, ctrlc: &mut mpsc::Receiver<()>) {
+fn handle_line(
+    system: &mut BasicSystem,
+    line: &str,
+    prev_cmd: &mut Option<Command>,
+    ctrlc: &mut mpsc::Receiver<()>,
+) {
+    if line.trim() == ""
+        && let Some(cmd) = prev_cmd.clone()
+    {
+        handle_command(system, cmd, ctrlc);
+        return;
+    }
     match shlex::split(line) {
         Some(mut parts) => {
             parts.insert(0, "".to_string());
             match Command::try_parse_from(parts) {
-                Ok(c) => handle_command(system, c, ctrlc),
+                Ok(c) => {
+                    prev_cmd.replace(c.clone());
+                    handle_command(system, c, ctrlc);
+                }
                 Err(e) => eprintln!("{e}"),
             }
         }

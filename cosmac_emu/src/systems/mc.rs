@@ -344,7 +344,7 @@ impl MembershipCard {
             return false;
         }
         match self.cpu.get_exec_opcode() {
-            Some(opcode @ (0x36 | 0x3e | 0xc6 | 0xce)) => {
+            Some(opcode @ (0x36 | 0x3e)) => {
                 self.opcode_history
                     .iter()
                     .filter(|oc| **oc == opcode)
