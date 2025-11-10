@@ -18,6 +18,16 @@ impl TestSystem {
         }
     }
 
+    fn new_with_program(data: impl Into<Vec<u8>>) -> Self {
+        let mem = Memory::builder().with_image(0, data).build().unwrap();
+        Self {
+            pins: Cdp1802Pins(Cdp1802Pins::mask_all()),
+            cpu: Cdp1802::default(),
+            mem,
+            write_enable: true,
+        }
+    }
+
     fn tick(&mut self) {
         self.cpu.tick(&mut self.pins);
         self.mem.tick(&mut self.pins, self.write_enable).ok();
@@ -25,12 +35,21 @@ impl TestSystem {
 
     fn tick_n(&mut self, n: usize) {
         for _ in 0..n {
-            self.tick()
+            self.tick();
+            println!("{} {}", self.cpu, self.pins);
         }
     }
 
     fn is_waiting(&self) -> bool {
         self.cpu.is_waiting(self.pins)
+    }
+
+    fn reset(&mut self) {
+        println!("reset");
+        self.pins.set_clear(false);
+        self.tick();
+        self.pins.set_clear(true);
+        self.tick_n(9);
     }
 }
 
@@ -163,4 +182,149 @@ fn test_dma_out() {
 #[test]
 fn test_dma_priority() {
     // dma in has priority over dma out
+}
+
+fn expect_lbr(instr: u8, cb: impl FnOnce(&mut TestSystem)) {
+    let mut sys = TestSystem::new_with_program([instr, 0x55, 0xaa]);
+    sys.reset();
+    cb(&mut sys);
+    sys.tick_n(24);
+    assert_matches!(sys.cpu.state, State::Fetch(0));
+    assert_eq!(sys.cpu.rp(), 0x55aa);
+}
+
+fn expect_lskp(instr: u8, cb: impl FnOnce(&mut TestSystem)) {
+    let mut sys = TestSystem::new_with_program([instr, 0xff, 0xff]);
+    sys.reset();
+    cb(&mut sys);
+    sys.tick_n(24);
+    assert_matches!(sys.cpu.state, State::Fetch(0));
+    assert_eq!(sys.cpu.rp(), 3);
+}
+
+fn expect_lcnt(instr: u8, cb: impl FnOnce(&mut TestSystem)) {
+    let mut sys = TestSystem::new_with_program([instr, 0xff, 0xff]);
+    sys.reset();
+    cb(&mut sys);
+    sys.tick_n(24);
+    assert_matches!(sys.cpu.state, State::Fetch(0));
+    assert_eq!(sys.cpu.rp(), 1);
+}
+
+#[test]
+fn test_lbr() {
+    expect_lbr(0xc0, |_| ());
+}
+
+#[test]
+fn test_lbr_at_page_boundary() {
+    // Validate that the lbxx implementation stores the high byte of the target address in a
+    // temporary register (b), and not r[p]. This is done by placing the high byte of the target
+    // address at the edge of a page boundary. The chip must do a full 16-bit increment of r[p] to
+    // successfully fetch the low byte on the subsequent page.
+    let mut prog = vec![0xc0, 0x01, 0xfe];
+    prog.extend([0; 256 + 251]);
+    prog.extend([0xc0, 0x55, 0xaa]);
+    assert_eq!(prog[0x1ff], 0x55);
+
+    let mut sys = TestSystem::new_with_program(prog);
+    sys.reset();
+
+    // first branch
+    sys.tick_n(24);
+    assert_matches!(sys.cpu.state, State::Fetch(0));
+    assert_eq!(sys.cpu.rp(), 0x01fe);
+
+    // second branch
+    sys.tick_n(24);
+    assert_matches!(sys.cpu.state, State::Fetch(0));
+    assert_eq!(sys.cpu.rp(), 0x55aa);
+}
+
+#[test]
+fn test_lbq() {
+    expect_lbr(0xc1, |sys| sys.cpu.out.set_q(true));
+    expect_lskp(0xc1, |sys| sys.cpu.out.set_q(false));
+}
+
+#[test]
+fn test_lbz() {
+    expect_lbr(0xc2, |sys| sys.cpu.d = 0);
+    expect_lskp(0xc2, |sys| sys.cpu.d = 1);
+}
+
+#[test]
+fn test_lbdf() {
+    expect_lbr(0xc3, |sys| sys.cpu.df = true);
+    expect_lskp(0xc3, |sys| sys.cpu.df = false);
+}
+
+#[test]
+fn test_nop() {
+    expect_lcnt(0xc4, |_| ());
+}
+
+#[test]
+fn test_lsnq() {
+    expect_lskp(0xc5, |sys| sys.cpu.out.set_q(false));
+    expect_lcnt(0xc5, |sys| sys.cpu.out.set_q(true));
+}
+
+#[test]
+fn test_lsnz() {
+    expect_lskp(0xc6, |sys| sys.cpu.d = 1);
+    expect_lcnt(0xc6, |sys| sys.cpu.d = 0);
+}
+
+#[test]
+fn test_lsnf() {
+    expect_lskp(0xc7, |sys| sys.cpu.df = false);
+    expect_lcnt(0xc7, |sys| sys.cpu.df = true);
+}
+
+#[test]
+fn test_lskp() {
+    expect_lskp(0xc8, |_| ());
+}
+
+#[test]
+fn test_lbnq() {
+    expect_lbr(0xc9, |sys| sys.cpu.out.set_q(false));
+    expect_lskp(0xc9, |sys| sys.cpu.out.set_q(true));
+}
+
+#[test]
+fn test_lbnz() {
+    expect_lbr(0xca, |sys| sys.cpu.d = 1);
+    expect_lskp(0xca, |sys| sys.cpu.d = 0);
+}
+
+#[test]
+fn test_lbnf() {
+    expect_lbr(0xcb, |sys| sys.cpu.df = false);
+    expect_lskp(0xcb, |sys| sys.cpu.df = true);
+}
+
+#[test]
+fn test_lsie() {
+    expect_lskp(0xcc, |sys| sys.cpu.ie = true);
+    expect_lcnt(0xcc, |sys| sys.cpu.ie = false);
+}
+
+#[test]
+fn test_lsq() {
+    expect_lskp(0xcd, |sys| sys.cpu.out.set_q(true));
+    expect_lcnt(0xcd, |sys| sys.cpu.out.set_q(false));
+}
+
+#[test]
+fn test_lsz() {
+    expect_lskp(0xce, |sys| sys.cpu.d = 0);
+    expect_lcnt(0xce, |sys| sys.cpu.d = 1);
+}
+
+#[test]
+fn test_lsdf() {
+    expect_lskp(0xcf, |sys| sys.cpu.df = true);
+    expect_lcnt(0xcf, |sys| sys.cpu.df = false);
 }

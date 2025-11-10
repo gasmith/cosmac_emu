@@ -110,6 +110,7 @@ pub struct Cdp1802 {
     pub d: u8,
     pub df: bool,
     pub b: u8,
+    pub br: bool,
     pub r: [u16; 16],
     pub p: u8,
     pub x: u8,
@@ -122,7 +123,6 @@ pub struct Cdp1802 {
     out: Cdp1802Pins,
 
     /// EF1 is the least significant bit.
-    ef: u8,
     prev_mode: Mode,
 }
 impl Display for Cdp1802 {
@@ -149,6 +149,7 @@ impl Distribution<Cdp1802> for StandardUniform {
             d: rng.random(),
             df: rng.random(),
             b: rng.random(),
+            br: rng.random(),
             r: rng.random(),
             p: rng.random_range(0..16),
             x: rng.random_range(0..16),
@@ -157,7 +158,6 @@ impl Distribution<Cdp1802> for StandardUniform {
             t: rng.random(),
             ie: rng.random(),
             out: Cdp1802Pins(rng.random::<u64>() & Cdp1802Pins::mask_bus_out()),
-            ef: rng.random::<u8>() & 0xf,
             prev_mode: Mode::Reset,
         }
     }
@@ -169,6 +169,7 @@ impl Default for Cdp1802 {
             d: 0,
             df: false,
             b: 0,
+            br: false,
             r: [0; 16],
             p: 0,
             x: 0,
@@ -177,7 +178,6 @@ impl Default for Cdp1802 {
             t: 0,
             ie: true,
             out: Cdp1802Pins::default(),
-            ef: 0,
             prev_mode: Mode::Reset,
         }
     }
@@ -505,12 +505,10 @@ impl Cdp1802 {
             (0xf, 0xf, t) => self.tick_subm(pins, t, self.p, false),
             (7, 0xf, t) => self.tick_subm(pins, t, self.p, true),
 
-            // NOP (c4)
-            (0xc, 4, _) => (),
-
-            // Bxx (3n) / LBxx (cn)
+            // Bxx (3n) / LBxx (cn) / LSxx (cn) / NOP (c4)
             (3, n, t) => self.tick_bxx(pins, t, n),
-            (0xc, n, t) => self.tick_lbxx(pins, t, n),
+            (0xc, n, t) if n & 0x4 == 0 => self.tick_lbxx(pins, t, n),
+            (0xc, n, t) => self.tick_lsxx(t, n),
 
             // SEP (dn) / SEX (en)
             (0xd, n, 3) => self.p = n,
@@ -707,9 +705,22 @@ impl Cdp1802 {
     fn tick_bxx(&mut self, pins: Cdp1802Pins, tick: u8, n: u8) {
         match tick {
             t @ (0 | 2) => self.tick_mrd(t, self.p),
-            1 => self.ef = pins.get_ef(),
+            1 => {
+                let br = match n & 7 {
+                    0x0 => true,
+                    0x1 => self.out.get_q(),
+                    0x2 => self.d == 0,
+                    0x3 => self.df,
+                    0x4 => !pins.get_ef1(),
+                    0x5 => !pins.get_ef2(),
+                    0x6 => !pins.get_ef3(),
+                    0x7 => !pins.get_ef4(),
+                    _ => unreachable!(),
+                };
+                self.b = if (n & 8) > 0 { !br } else { br } as u8;
+            }
             3 => {
-                if self.test(n) {
+                if self.b != 0 {
                     let m = pins.get_bus();
                     self.plo(self.p, m);
                 } else {
@@ -723,14 +734,30 @@ impl Cdp1802 {
     fn tick_lbxx(&mut self, pins: Cdp1802Pins, tick: u8, n: u8) {
         match tick {
             t @ (0 | 2) => self.tick_mrd(t, self.p),
-            1 => self.ef = pins.get_ef(),
+            1 => {
+                self.br = match n {
+                    0x0 => true,
+                    0x1 => self.out.get_q(),
+                    0x2 => self.d == 0,
+                    0x3 => self.df,
+                    0x8 => false,
+                    0x9 => !self.out.get_q(),
+                    0xa => self.d != 0,
+                    0xb => !self.df,
+                    _ => unreachable!("lbxx: {n}"),
+                }
+            }
             3 => {
-                self.b = pins.get_bus();
+                if self.br {
+                    // Store the high byte in a temporary register, so that we can use
+                    // r[p] to fetch the low byte in the subsequent machine cycle.
+                    self.b = pins.get_bus();
+                }
                 self.inc(self.p);
             }
             t @ (8 | 10) => self.tick_mrd(t & 7, self.p),
             11 => {
-                if self.test(n) {
+                if self.br {
                     let m = pins.get_bus();
                     self.plo(self.p, m);
                     self.phi(self.p, self.b);
@@ -742,19 +769,24 @@ impl Cdp1802 {
         }
     }
 
-    fn test(&self, n: u8) -> bool {
-        let br = match n & 7 {
-            0x0 => true,
-            0x1 => self.out.get_q(),
-            0x2 => self.d == 0,
-            0x3 => self.df,
-            0x4 => (self.ef & 1) == 0,
-            0x5 => (self.ef & 2) == 0,
-            0x6 => (self.ef & 4) == 0,
-            0x7 => (self.ef & 8) == 0,
-            _ => unreachable!(),
-        };
-        if (n & 8) > 0 { !br } else { br }
+    fn tick_lsxx(&mut self, tick: u8, n: u8) {
+        match tick {
+            1 => {
+                self.br = match n {
+                    0x4 => false,
+                    0x5 => !self.out.get_q(),
+                    0x6 => self.d != 0,
+                    0x7 => !self.df,
+                    0xc => self.ie,
+                    0xd => self.out.get_q(),
+                    0xe => self.d == 0,
+                    0xf => self.df,
+                    _ => unreachable!("lsxx: {n}"),
+                };
+            }
+            3 | 11 if self.br => self.inc(self.p),
+            _ => (),
+        }
     }
 
     fn tick_output(&mut self, tick: u8, n: u8) {
