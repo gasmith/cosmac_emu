@@ -1,26 +1,15 @@
 use std::fmt::Display;
 
+use crate::uart::{Parity, UartMode};
+
 use super::Ay51013Pins;
 
 #[derive(Debug, Default)]
 pub struct Ay51013 {
-    ctrl: Ctrl,
+    ctrl: UartMode,
     tx: Tx,
     rx: Rx,
     cycle: u64,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Parity {
-    Even,
-    Odd,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Ctrl {
-    char_bits: u8,
-    parity: Option<Parity>,
-    stop_bits: u8,
 }
 
 #[derive(Debug, Default)]
@@ -102,23 +91,17 @@ impl Ay51013 {
     ///  - /SWE: 0
     ///  - /RDAV: 1
     ///  - XR: 0
-    pub fn configure(
-        &mut self,
-        pins: &mut Ay51013Pins,
-        char_bits: u8,
-        parity: impl Into<Option<Parity>>,
-        stop_bits: u8,
-    ) {
-        assert!((5..=8).contains(&char_bits));
-        assert!((1..=2).contains(&stop_bits));
-        pins.set_nb(char_bits - 5);
-        let parity = parity.into();
-        pins.set_eps(parity.is_some_and(|p| matches!(p, Parity::Even)));
-        pins.set_np(parity.is_none());
-        pins.set_tsb(stop_bits == 2);
+    pub fn configure(&mut self, pins: &mut Ay51013Pins, mode: UartMode) {
+        assert!((5..=8).contains(&mode.char_bits));
+        assert!((1..=2).contains(&mode.stop_bits));
+        pins.set_nb(mode.char_bits - 5);
+        pins.set_eps(mode.parity.is_some_and(|p| matches!(p, Parity::Even)));
+        pins.set_np(mode.parity.is_none());
+        pins.set_tsb(mode.stop_bits == 2);
         pins.set_cs(true);
         self.reset(pins);
         pins.set_cs(false);
+        assert_eq!(self.ctrl, mode);
     }
 
     /// Resets the device without updating its configuration.
@@ -145,7 +128,16 @@ impl Ay51013 {
             self.tx.reset();
         }
 
-        self.ctrl.tick(*pins);
+        if pins.get_cs() {
+            self.ctrl.parity = match (pins.get_np(), pins.get_eps()) {
+                (true, _) => None,
+                (false, false) => Some(Parity::Odd),
+                (false, true) => Some(Parity::Even),
+            };
+            self.ctrl.char_bits = pins.get_nb() + 5;
+            self.ctrl.stop_bits = (pins.get_tsb() as u8) + 1;
+        }
+
         self.rx.tick(self.ctrl, pins);
         self.tx.tick(self.ctrl, pins);
         self.cycle += 1;
@@ -153,39 +145,6 @@ impl Ay51013 {
 
     pub fn is_tx_idle(&self) -> bool {
         matches!(self.tx.state, TxState::Idle)
-    }
-}
-
-impl Display for Ctrl {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let p = match self.parity {
-            None => 'n',
-            Some(Parity::Odd) => 'o',
-            Some(Parity::Even) => 'e',
-        };
-        write!(f, "{}{p}{}", self.char_bits, self.stop_bits)
-    }
-}
-impl Default for Ctrl {
-    fn default() -> Self {
-        Self {
-            char_bits: 8,
-            parity: None,
-            stop_bits: 1,
-        }
-    }
-}
-impl Ctrl {
-    fn tick(&mut self, pins: Ay51013Pins) {
-        if pins.get_cs() {
-            self.parity = match (pins.get_np(), pins.get_eps()) {
-                (true, _) => None,
-                (false, false) => Some(Parity::Odd),
-                (false, true) => Some(Parity::Even),
-            };
-            self.char_bits = pins.get_nb() + 5;
-            self.stop_bits = (pins.get_tsb() as u8) + 1;
-        }
     }
 }
 
@@ -198,7 +157,7 @@ impl Rx {
         self.shift = 0;
     }
 
-    fn tick(&mut self, ctrl: Ctrl, pins: &mut Ay51013Pins) {
+    fn tick(&mut self, ctrl: UartMode, pins: &mut Ay51013Pins) {
         (self.state, self.tick) = match (self.state, pins.get_si(), self.tick) {
             (RxState::Idle, true, _) => (RxState::WaitSi, 0),
             (RxState::WaitSi, false, _) => (RxState::Start, 0),
@@ -283,7 +242,7 @@ impl Tx {
         *self = Default::default();
     }
 
-    fn tick(&mut self, ctrl: Ctrl, pins: &mut Ay51013Pins) {
+    fn tick(&mut self, ctrl: UartMode, pins: &mut Ay51013Pins) {
         // Latch data bits on the DS rising edge, regardless of what state we're in.
         let ds = pins.get_ds();
         if !self.prev_ds && ds {
@@ -354,7 +313,7 @@ impl Tx {
         pins.set_so(self.so);
     }
 
-    fn start(&mut self, ctrl: Ctrl) {
+    fn start(&mut self, ctrl: UartMode) {
         self.parity = ctrl.parity.is_some_and(|p| matches!(p, Parity::Even));
         self.shift = self.buffer;
         self.so = false;

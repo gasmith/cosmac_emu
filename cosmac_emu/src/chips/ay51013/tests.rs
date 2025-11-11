@@ -1,4 +1,6 @@
-use super::{Ay51013, Ay51013Pins, Parity};
+use crate::uart::{Parity, UartMode};
+
+use super::{Ay51013, Ay51013Pins};
 
 macro_rules! tick_n {
     ($chip:expr, $pins:expr, $n:expr) => {
@@ -12,7 +14,7 @@ macro_rules! tick_n {
 fn test_tx_8n1() {
     let mut pins = Ay51013Pins::default();
     let mut chip = Ay51013::default();
-    chip.configure(&mut pins, 8, None, 1);
+    chip.configure(&mut pins, UartMode::new(8, None, 1));
 
     pins.set_db(0x53);
     pins.set_ds(false);
@@ -49,7 +51,7 @@ fn test_tx_8n1() {
 fn test_tx_5o2() {
     let mut pins = Ay51013Pins::default();
     let mut chip = Ay51013::default();
-    chip.configure(&mut pins, 5, Parity::Odd, 2);
+    chip.configure(&mut pins, UartMode::new(5, Parity::Odd, 2));
 
     pins.set_db(0x6c);
     pins.set_ds(false);
@@ -92,7 +94,7 @@ fn test_tx_5o2() {
 fn test_tx_5e1_with_buffering() {
     let mut pins = Ay51013Pins::default();
     let mut chip = Ay51013::default();
-    chip.configure(&mut pins, 5, Parity::Even, 1);
+    chip.configure(&mut pins, UartMode::new(5, Parity::Even, 1));
 
     // Load character with odd parity.
     pins.set_db(0x8);
@@ -202,7 +204,7 @@ fn reset_dav(chip: &mut Ay51013, pins: &mut Ay51013Pins) {
 fn test_roundtrip_8e1() {
     let mut pins = Ay51013Pins::default();
     let mut chip = Ay51013::default();
-    chip.configure(&mut pins, 8, Parity::Even, 1);
+    chip.configure(&mut pins, UartMode::new(8, Parity::Even, 1));
     for val in 0..=255 {
         roundtrip(&mut chip, &mut pins, 176, dbg!(val));
         reset_dav(&mut chip, &mut pins);
@@ -213,7 +215,7 @@ fn test_roundtrip_8e1() {
 fn test_rx_false_start() {
     let mut pins = Ay51013Pins::default();
     let mut chip = Ay51013::default();
-    chip.configure(&mut pins, 5, None, 1);
+    chip.configure(&mut pins, UartMode::new(5, None, 1));
 
     // Start not held long enough.
     pins.set_si(false);
@@ -241,7 +243,7 @@ fn test_rx_false_start() {
 fn test_rx_framing_error() {
     let mut pins = Ay51013Pins::default();
     let mut chip = Ay51013::default();
-    chip.configure(&mut pins, 5, None, 1);
+    chip.configure(&mut pins, UartMode::new(5, None, 1));
 
     // Start, data, stop
     pins.set_si(false);
@@ -259,7 +261,7 @@ fn test_rx_framing_error() {
 fn test_rx_parity_error() {
     let mut pins = Ay51013Pins::default();
     let mut chip = Ay51013::default();
-    chip.configure(&mut pins, 5, Parity::Even, 1);
+    chip.configure(&mut pins, UartMode::new(5, Parity::Even, 1));
 
     // Start, data, parity
     pins.set_si(false);
@@ -281,7 +283,7 @@ fn test_rx_parity_error() {
 fn test_rx_overrun() {
     let mut pins = Ay51013Pins::default();
     let mut chip = Ay51013::default();
-    chip.configure(&mut pins, 8, None, 1);
+    chip.configure(&mut pins, UartMode::new(8, None, 1));
 
     // Do not set RDAV.
     roundtrip(&mut chip, &mut pins, 160, 0xaa);

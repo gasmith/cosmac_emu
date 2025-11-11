@@ -5,6 +5,6 @@ mod pins;
 #[cfg(test)]
 mod tests;
 mod uart;
-pub use chip::{Ay51013, Parity};
+pub use chip::Ay51013;
 pub use pins::Ay51013Pins;
 pub use uart::Ay51013Uart;

@@ -3,6 +3,7 @@ use color_eyre::{Result, eyre};
 
 use crate::chips::ay51013::Ay51013Uart;
 use crate::tui::mc::MembershipCardTui;
+use crate::uart::UartMode;
 use crate::{chips::cdp1802::Memory, cli::parse_addr, systems::mc::MembershipCard};
 
 use super::CommonRunArgs;
@@ -21,6 +22,14 @@ pub struct TuiArgs {
     /// UART baud rate.
     #[arg(long, default_value = "4800")]
     uart_baud: u16,
+
+    /// UART mode.
+    #[arg(long, default_value = "8n1")]
+    uart_mode: UartMode,
+
+    /// Forcibly interpret 8n1 bytes as 7-bit ascii, by ignoring the msb.
+    #[arg(long)]
+    uart_force_7bit_ascii: bool,
 
     /// Address to jump to during reset.
     #[arg(long, value_parser=parse_addr)]
@@ -57,6 +66,8 @@ pub fn run(args: TuiArgs) -> Result<()> {
     let memory = builder.build()?;
     let uart = Ay51013Uart::builder()
         .with_baud(args.uart_baud, args.common.clock_freq)
+        .with_mode(args.uart_mode)
+        .with_force_7bit_ascii(args.uart_force_7bit_ascii)
         .build();
     let mc = MembershipCard::builder()
         .with_clock_freq(args.common.clock_freq)
