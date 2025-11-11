@@ -15,6 +15,9 @@ pub fn set_2(pins: u64, lsb: u8, val: u8) -> u64 {
 pub fn set_3(pins: u64, lsb: u8, val: u8) -> u64 {
     set_n(pins, lsb, 0x7, val)
 }
+pub fn set_4(pins: u64, lsb: u8, val: u8) -> u64 {
+    set_n(pins, lsb, 0xf, val)
+}
 pub fn set_8(pins: u64, lsb: u8, val: u8) -> u64 {
     set_n(pins, lsb, 0xff, val)
 }
@@ -34,4 +37,3 @@ pub fn get_4(pins: u64, lsb: u8) -> u8 {
 pub fn get_8(pins: u64, lsb: u8) -> u8 {
     ((pins >> lsb) & 0xff) as u8
 }
-

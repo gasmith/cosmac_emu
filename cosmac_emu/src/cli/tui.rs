@@ -35,9 +35,9 @@ pub struct TuiArgs {
     #[arg(long, value_parser=parse_addr)]
     jump_to: Option<u16>,
 
-    /// Whether to invert EF3.
+    /// Whether to invert EF.
     #[arg(long)]
-    invert_ef3: bool,
+    invert_ef: bool,
 
     /// Whether to invert Q.
     #[arg(long)]
@@ -71,7 +71,7 @@ pub fn run(args: TuiArgs) -> Result<()> {
         .build();
     let mc = MembershipCard::builder()
         .with_clock_freq(args.common.clock_freq)
-        .with_invert_ef3(args.invert_ef3)
+        .with_invert_ef(args.invert_ef)
         .with_invert_q(args.invert_q)
         .with_memory(memory)
         .with_speed(args.speed)

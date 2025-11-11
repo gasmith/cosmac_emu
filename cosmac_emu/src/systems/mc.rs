@@ -28,7 +28,7 @@ pub enum Status {
 pub struct Builder {
     memory: Memory,
     front: FrontPanel,
-    invert_ef3: bool,
+    invert_ef: bool,
     invert_q: bool,
     clk_freq: u32,
     speed: Option<f64>,
@@ -39,7 +39,7 @@ impl Default for Builder {
         Self {
             memory: Memory::default(),
             front: FrontPanel::default(),
-            invert_ef3: false,
+            invert_ef: false,
             invert_q: false,
             clk_freq: 4_000_000,
             speed: None,
@@ -52,8 +52,8 @@ impl Builder {
         Self { memory, ..self }
     }
 
-    pub fn with_invert_ef3(self, invert_ef3: bool) -> Self {
-        Self { invert_ef3, ..self }
+    pub fn with_invert_ef(self, invert_ef: bool) -> Self {
+        Self { invert_ef, ..self }
     }
 
     pub fn with_invert_q(self, invert_q: bool) -> Self {
@@ -77,6 +77,9 @@ impl Builder {
     pub fn build(self) -> MembershipCard {
         let mut cpu = Cdp1802::default();
         let mut cpu_pins = Cdp1802Pins::default();
+        if self.invert_ef {
+            cpu_pins.set_ef(0);
+        }
         cpu.reset(&mut cpu_pins);
 
         let clock_freq_f64 = self.clk_freq as f64;
@@ -93,7 +96,7 @@ impl Builder {
             front_panel: self.front,
             last_front_panel: self.front,
             uart: self.uart,
-            invert_ef3: self.invert_ef3,
+            invert_ef: self.invert_ef,
             invert_q: self.invert_q,
             last_pc: 0,
             opcode_history: VecDeque::with_capacity(OPCODE_HISTORY_LEN),
@@ -122,7 +125,7 @@ pub struct MembershipCard {
     front_panel: FrontPanel,
     last_front_panel: FrontPanel,
     uart: Option<Box<dyn Uart>>,
-    invert_ef3: bool,
+    invert_ef: bool,
     invert_q: bool,
     last_pc: u16,
     opcode_history: VecDeque<u8>,
@@ -170,9 +173,10 @@ impl MembershipCard {
 
         // Propagate signals from front panel.
         let load = self.front_panel.clear && self.front_panel.wait;
-        self.cpu_pins.set_ef4(!self.front_panel.inp);
         self.cpu_pins.set_clear(!self.front_panel.clear);
         self.cpu_pins.set_wait(!self.front_panel.wait);
+        self.cpu_pins
+            .set_ef4(self.invert_ef ^ !self.front_panel.inp);
         let write_enable = !self.front_panel.read;
 
         // In the load state, when the inp button is released, set /DmaIn.
@@ -242,7 +246,7 @@ impl MembershipCard {
                 uart.tick();
             }
             // Propagate UART tx pin to EF3.
-            self.cpu_pins.set_ef3(self.invert_ef3 ^ uart.get_tx_pin());
+            self.cpu_pins.set_ef3(self.invert_ef ^ uart.get_tx_pin());
         }
 
         // Update clock, and sleep if we're too far ahead of schedule.

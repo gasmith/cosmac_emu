@@ -213,6 +213,9 @@ impl Cdp1802Pins {
     pub fn set_intr(&mut self, val: bool) {
         self.0 = bits::set_1(self.0, Pin::Intr as u8, val);
     }
+    pub fn set_ef(&mut self, val: u8) {
+        self.0 = bits::set_4(self.0, Pin::Ef1 as u8, val);
+    }
     pub fn set_ef1(&mut self, val: bool) {
         self.0 = bits::set_1(self.0, Pin::Ef1 as u8, val);
     }
