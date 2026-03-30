@@ -23,11 +23,16 @@ use rand::distr::{Distribution, StandardUniform};
 use super::math;
 
 mod memory;
+mod micro_ops;
 mod pins;
 #[cfg(test)]
 mod tests;
 
 pub use memory::{Memory, MemoryRange};
+use micro_ops::{
+    Access, AluOp, Bit, Cycle, DMA_IN_CYCLE, DMA_OUT_CYCLE, FETCH_CYCLE, INSTR_CYCLE_TABLE,
+    MicroOp, Reg,
+};
 pub use pins::Cdp1802Pins;
 
 #[derive(Debug, Clone, Copy)]
@@ -114,8 +119,7 @@ pub struct Cdp1802 {
     pub r: [u16; 16],
     pub p: u8,
     pub x: u8,
-    pub i: u8,
-    pub n: u8,
+    pub instr: u8,
     pub t: u8,
     pub ie: bool,
 
@@ -138,7 +142,7 @@ impl Display for Cdp1802 {
             rx = self.r[self.x as usize],
             p = self.p,
             rp = self.r[self.p as usize],
-            i = self.i << 4 | self.n,
+            i = self.instr,
         )
     }
 }
@@ -153,8 +157,7 @@ impl Distribution<Cdp1802> for StandardUniform {
             r: rng.random(),
             p: rng.random_range(0..16),
             x: rng.random_range(0..16),
-            i: rng.random_range(0..16),
-            n: rng.random_range(0..16),
+            instr: rng.random(),
             t: rng.random(),
             ie: rng.random(),
             out: Cdp1802Pins(rng.random::<u64>() & Cdp1802Pins::mask_bus_out()),
@@ -173,8 +176,7 @@ impl Default for Cdp1802 {
             r: [0; 16],
             p: 0,
             x: 0,
-            i: 0,
-            n: 0,
+            instr: 0,
             t: 0,
             ie: true,
             out: Cdp1802Pins::default(),
@@ -197,7 +199,7 @@ impl Cdp1802 {
             (Mode::Reset, State::Init(0)) => true,
             (Mode::Reset, _) => false,
             (Mode::Pause, _) => true,
-            (Mode::Run, State::Execute(7)) if matches!((self.i, self.n), (0, 0)) => !dma_intr,
+            (Mode::Run, State::Execute(7)) if self.instr == 0 => !dma_intr,
             (Mode::Run, _) => false,
         }
     }
@@ -209,7 +211,7 @@ impl Cdp1802 {
     /// Returns the current opcode, if the chip is entering S1.
     pub fn get_exec_opcode(&self) -> Option<u8> {
         if matches!(self.state, State::Execute(0)) {
-            Some(self.i << 4 | self.n)
+            Some(self.instr)
         } else {
             None
         }
@@ -237,7 +239,7 @@ impl Cdp1802 {
         // Drive the bus during write cycles...
         let mwr = !self.out.get_mwr();
         // ... but not during INP instructions.
-        let inp = matches!(self.state, State::Execute(_)) && self.i == 6 && self.n >= 9;
+        let inp = matches!(self.state, State::Execute(_)) && (0x69..0x70).contains(&self.instr);
         let mask = if init || (mwr && !inp) {
             Cdp1802Pins::mask_bus_out()
         } else {
@@ -247,8 +249,7 @@ impl Cdp1802 {
     }
 
     fn tick_reset(&mut self) {
-        self.i = 0;
-        self.n = 0;
+        self.instr = 0;
         self.ie = true;
         self.state = State::Init(0);
         self.out = Cdp1802Pins(0);
@@ -267,12 +268,12 @@ impl Cdp1802 {
         self.tick_timing_pulses(matches!(self.state, State::DmaIn(_)));
         match self.state {
             State::Init(t) => self.tick_init(t),
-            State::DmaIn(t) => self.tick_dma_in(t),
+            State::DmaIn(t) => self.tick_cycle(t, pins, &DMA_IN_CYCLE),
             State::Execute(2) => {
                 let addr = self.glo(self.p);
                 if addr > 0 {
                     self.out.set_mrd(false);
-                    self.out.set_ma(addr.overflowing_sub(1).0);
+                    self.out.set_ma(addr.wrapping_sub(1));
                 }
             }
             State::Execute(_) => (),
@@ -297,10 +298,10 @@ impl Cdp1802 {
         self.tick_timing_pulses(true);
         match self.state {
             State::Init(t) => self.tick_init(t),
-            State::Fetch(t) => self.tick_fetch(t, pins),
-            State::Execute(t) => self.tick_execute(t, pins),
-            State::DmaIn(t) => self.tick_dma_in(t),
-            State::DmaOut(t) => self.tick_dma_out(t),
+            State::Fetch(t) => self.tick_cycle(t, pins, &FETCH_CYCLE),
+            State::Execute(t) => self.tick_cycle(t, pins, &INSTR_CYCLE_TABLE[self.instr as usize]),
+            State::DmaIn(t) => self.tick_cycle(t, pins, &DMA_IN_CYCLE),
+            State::DmaOut(t) => self.tick_cycle(t, pins, &DMA_OUT_CYCLE),
             State::Interrupt(t) => self.tick_interrupt(t),
         };
         self.state = match self.state {
@@ -308,12 +309,12 @@ impl Cdp1802 {
             State::Init(8) => self.sample_dma_intr(pins, false).unwrap_or(State::Fetch(0)),
 
             // IDL instruction stays in S1.
-            State::Execute(7) if matches!((self.i, self.n), (0, 0)) => self
+            State::Execute(7) if self.instr == 0 => self
                 .sample_dma_intr(pins, self.ie)
                 .unwrap_or(State::Execute(0)),
 
             // Non-long-branch instructions return to S0.
-            State::Execute(7) if self.i != 0xc => self
+            State::Execute(7) if (self.instr >> 4) != 0xc => self
                 .sample_dma_intr(pins, self.ie)
                 .unwrap_or(State::Fetch(0)),
 
@@ -360,206 +361,199 @@ impl Cdp1802 {
         }
     }
 
-    fn tick_fetch(&mut self, tick: u8, pins: Cdp1802Pins) {
-        match tick {
-            0 | 2 => self.tick_mrd(tick, self.p),
-            3 => {
-                let inst = pins.get_bus();
-                self.i = (inst & 0xf0) >> 4;
-                self.n = inst & 0x0f;
-                // Don't increment the program counter for the IDL instruction.
-                if inst != 0 {
-                    self.inc(self.p);
-                }
-            }
-            _ => (),
-        }
-    }
-
-    fn tick_execute(&mut self, tick: u8, pins: Cdp1802Pins) {
-        match (self.i, self.n, tick) {
-            // Ensure that instr nibbles and ticks are within bounds.
-            (16.., _, _) | (_, 16.., _) | (_, _, 16..) => unreachable!(),
-
-            // IDL (00)
-            (0, 0, t @ (0 | 2)) => self.tick_mrd(t, 0),
-            (0, 0, _) => (),
-
-            // LDN (0n) / LDA (4n)
-            (0 | 4, n, t @ (0 | 2)) => self.tick_mrd(t, n),
-            (0 | 4, _, 3) => self.d = pins.get_bus(),
-            (4, n, 4) => self.inc(n),
-            (0 | 4, _, _) => (),
-
-            // LDXA (72)
-            (7, 2, t @ (0 | 2)) => self.tick_mrd(t, self.x),
-            (7, 2, 3) => self.d = pins.get_bus(),
-            (7, 2, 4) => self.inc(self.x),
-            (7, 2, _) => (),
-
-            // LDX (f0)
-            (0xf, 0, t @ (0 | 2)) => self.tick_mrd(t, self.x),
-            (0xf, 0, 3) => self.d = pins.get_bus(),
-            (0xf, 0, _) => (),
-
-            // LDI (f8)
-            (0xf, 8, t @ (0 | 2)) => self.tick_mrd(t, self.p),
-            (0xf, 8, 3) => self.d = pins.get_bus(),
-            (0xf, 8, 4) => self.inc(self.p),
-            (0xf, 8, _) => (),
-
-            // STR (5n)
-            (5, n, t) => self.tick_store(t, n, self.d),
-
-            // STXD (73)
-            (7, 3, 4) => self.dec(self.x),
-            (7, 3, t) => self.tick_store(t, self.x, self.d),
-
-            // INC (1n) / DEC (2n)
-            (1, n, 4) => self.inc(n),
-            (2, n, 4) => self.dec(n),
-            (1 | 2, _, _) => (),
-
-            // IRX (60)
-            (6, 0, 4) => self.inc(self.x),
-            (6, 0, _) => (),
-
-            // GLO (8n) / GHI (9n) / PLO (an) / PHI (bn)
-            (8, n, 3) => self.d = self.glo(n),
-            (9, n, 3) => self.d = self.ghi(n),
-            (0xa, n, 3) => self.plo(n, self.d),
-            (0xb, n, 3) => self.phi(n, self.d),
-            (8..=0xb, _, _) => (),
-
-            // OR (f1) / AND (f2) / XOR (f3)
-            (0xf, 1..=3, t @ (0 | 2)) => self.tick_mrd(t, self.x),
-            (0xf, 1, 3) => self.d |= pins.get_bus(),
-            (0xf, 2, 3) => self.d &= pins.get_bus(),
-            (0xf, 3, 3) => self.d ^= pins.get_bus(),
-            (0xf, 1..=3, _) => (),
-
-            // ORI (f9) / ANI (fa) / XRI (fb)
-            (0xf, 9..=0xb, t @ (0 | 2)) => self.tick_mrd(t, self.p),
-            (0xf, 9, 3) => {
-                self.d |= pins.get_bus();
-                self.inc(self.p);
-            }
-            (0xf, 0xa, 3) => {
-                self.d &= pins.get_bus();
-                self.inc(self.p);
-            }
-            (0xf, 0xb, 3) => {
-                self.d ^= pins.get_bus();
-                self.inc(self.p);
-            }
-            (0xf, 9..=0xb, _) => (),
-
-            // SHR (f6) / SHL (fe)
-            (0xf, 6, 3) => (self.d, self.df) = (self.d >> 1, self.d & 0x1 != 0),
-            (0xf, 0xe, 3) => (self.d, self.df) = (self.d << 1, self.d & 0x80 != 0),
-            (0xf, 6 | 0xe, _) => (),
-
-            // SHRC (76) / SHLC (7e)
-            (7, 6, 3) => {
-                let df = self.d & 0x01 != 0;
-                self.d >>= 1;
-                if self.df {
-                    self.d |= 0x80;
-                }
-                self.df = df;
-            }
-            (7, 0xe, 3) => {
-                let df = self.d & 0x80 != 0;
-                self.d <<= 1;
-                if self.df {
-                    self.d |= 0x01;
-                }
-                self.df = df;
-            }
-            (7, 6 | 0xe, _) => (),
-
-            // ADD (f4) / ADC (74)
-            (0xf, 4, t) => self.tick_add(pins, t, self.x, false),
-            (7, 4, t) => self.tick_add(pins, t, self.x, true),
-
-            // ADI (fc) / ADCI (7c)
-            (0xf | 7, 0xc, 4) => self.inc(self.p),
-            (0xf, 0xc, t) => self.tick_add(pins, t, self.p, false),
-            (7, 0xc, t) => self.tick_add(pins, t, self.p, true),
-
-            // SD (f5) / SDB (75)
-            (0xf, 5, t) => self.tick_subd(pins, t, self.x, false),
-            (7, 5, t) => self.tick_subd(pins, t, self.x, true),
-
-            // SDI (fd) / SDBI (7d)
-            (0xf | 7, 0xd, 4) => self.inc(self.p),
-            (0xf, 0xd, t) => self.tick_subd(pins, t, self.p, false),
-            (7, 0xd, t) => self.tick_subd(pins, t, self.p, true),
-
-            // SM (f7) / SMB (77)
-            (0xf, 7, t) => self.tick_subm(pins, t, self.x, false),
-            (7, 7, t) => self.tick_subm(pins, t, self.x, true),
-
-            // SMI (ff) / SMBI (7f)
-            (0xf | 7, 0xf, 4) => self.inc(self.p),
-            (0xf, 0xf, t) => self.tick_subm(pins, t, self.p, false),
-            (7, 0xf, t) => self.tick_subm(pins, t, self.p, true),
-
-            // Bxx (3n) / LBxx (cn) / LSxx (cn) / NOP (c4)
-            (3, n, t) => self.tick_bxx(pins, t, n),
-            (0xc, n, t) if n & 0x4 == 0 => self.tick_lbxx(pins, t, n),
-            (0xc, n, t) => self.tick_lsxx(t, n),
-
-            // SEP (dn) / SEX (en)
-            (0xd, n, 3) => self.p = n,
-            (0xe, n, 3) => self.x = n,
-            (0xd | 0xe, _, _) => (),
-
-            // REQ (7a) / SEQ (7b)
-            (7, n @ (0xa | 0xb), 3) => self.out.set_q(n & 1 != 0),
-            (7, 0xa | 0xb, _) => (),
-
-            // SAV (78) / MARK (79)
-            (7, 8, t) => self.tick_store(t, self.x, self.t),
-            (7, 9, t) => self.tick_mark(t),
-
-            // RET (70) / DIS (71)
-            (7, 0, t) => self.tick_ret(pins, t, true),
-            (7, 1, t) => self.tick_ret(pins, t, false),
-
-            // OUT (61..67) / IN (69..6f)
-            (6, n @ 1..=7, t) => self.tick_output(t, n),
-            (6, n @ 9..=0xf, t) => self.tick_input(pins, t, n - 8),
-
-            // Resv
-            (6, 8, _) => (),
-        }
-    }
-
-    fn tick_dma_in(&mut self, tick: u8) {
-        match tick {
-            0 => self.out.set_ma(self.ghi(0)),
-            2 => self.out.set_ma(self.glo(0)),
-            4 => self.inc(0),
-            5 => self.out.set_mwr(false),
-            _ => (),
-        }
-    }
-
-    fn tick_dma_out(&mut self, tick: u8) {
-        match tick {
-            0 | 2 => self.tick_mrd(tick, 0),
-            4 => self.inc(0),
-            _ => (),
-        }
-    }
-
     fn tick_interrupt(&mut self, tick: u8) {
         if tick == 0 {
             self.t = (self.x << 4) | (self.p & 0xf);
             self.x = 2;
             self.p = 1;
             self.ie = false;
+        }
+    }
+
+    fn tick_cycle(&mut self, tick: u8, pins: Cdp1802Pins, cycle: &Cycle) {
+        // Helper to resolve register reference to register index.
+        let reg = |reg| match reg {
+            Reg::R(n) => n,
+            Reg::X => self.x,
+            Reg::P => self.p,
+        };
+
+        // Memory addressing and MWR/MRD/N signaling.
+        let phase = tick & 7;
+        match cycle.access {
+            Access::None => (),
+            Access::Read(r) => match phase {
+                0 => self.out.set_ma(self.ghi(reg(r))),
+                2 => {
+                    self.out.set_ma(self.glo(reg(r)));
+                    self.out.set_mrd(false);
+                }
+                _ => (),
+            },
+            Access::Write(r) => match phase {
+                0 => self.out.set_ma(self.ghi(reg(r))),
+                2 => self.out.set_ma(self.glo(reg(r))),
+                5 => self.out.set_mwr(false),
+                _ => (),
+            },
+            Access::Out(r, n) => match phase {
+                0 => {
+                    self.out.set_n(n);
+                    self.out.set_ma(self.ghi(reg(r)));
+                }
+                2 => {
+                    self.out.set_ma(self.glo(reg(r)));
+                    self.out.set_mrd(false);
+                }
+                7 => self.out.set_n(0),
+                _ => (),
+            },
+            Access::Inp(r, n) => match phase {
+                0 => {
+                    self.out.set_n(n);
+                    self.out.set_ma(self.ghi(reg(r)));
+                }
+                2 => self.out.set_ma(self.glo(reg(r))),
+                5 => self.out.set_mwr(false),
+                7 => self.out.set_n(0),
+                _ => (),
+            },
+        }
+
+        // Micro-ops
+        match cycle.ticks[tick as usize] {
+            MicroOp::Idle => (),
+            MicroOp::Fetch => {
+                self.instr = pins.get_bus();
+                // Don't increment the program counter for the IDL instruction.
+                if self.instr != 0 {
+                    self.inc(self.p);
+                }
+            }
+            MicroOp::Inc(r) => self.inc(reg(r)),
+            MicroOp::Dec(r) => self.dec(reg(r)),
+            MicroOp::SetBusD => self.out.set_bus(self.d),
+            MicroOp::SetBusT => self.out.set_bus(self.t),
+            MicroOp::GetBus => self.d = pins.get_bus(),
+            MicroOp::GetLo(r) => self.d = self.glo(reg(r)),
+            MicroOp::GetHi(r) => self.d = self.ghi(reg(r)),
+            MicroOp::PutLo(r) => self.plo(reg(r), self.d),
+            MicroOp::PutHi(r) => self.phi(reg(r), self.d),
+            MicroOp::SetQ(q) => self.out.set_q(q),
+            MicroOp::SetP(n) => self.p = n,
+            MicroOp::SetX(n) => self.x = n,
+            MicroOp::Alu(alu) => match alu {
+                AluOp::Or => self.d |= pins.get_bus(),
+                AluOp::And => self.d &= pins.get_bus(),
+                AluOp::Xor => self.d ^= pins.get_bus(),
+                AluOp::Shl => (self.d, self.df) = (self.d << 1, self.d & 0x80 != 0),
+                AluOp::Shr => (self.d, self.df) = (self.d >> 1, self.d & 0x1 != 0),
+                AluOp::Shlc => {
+                    let df = self.d & 0x80 != 0;
+                    self.d <<= 1;
+                    if self.df {
+                        self.d |= 0x01;
+                    }
+                    self.df = df;
+                }
+                AluOp::Shrc => {
+                    let df = self.d & 0x01 != 0;
+                    self.d >>= 1;
+                    if self.df {
+                        self.d |= 0x80;
+                    }
+                    self.df = df;
+                }
+                AluOp::Add => {
+                    let m = pins.get_bus();
+                    (self.d, self.df) = math::add(self.d, m);
+                }
+                AluOp::Adc => {
+                    let m = pins.get_bus();
+                    (self.d, self.df) = math::addc(self.d, m, self.df);
+                }
+                AluOp::Sd => {
+                    let m = pins.get_bus();
+                    let (d, borrow) = math::sub(m, self.d);
+                    self.d = d;
+                    self.df = !borrow;
+                }
+                AluOp::Sdb => {
+                    let m = pins.get_bus();
+                    let (d, borrow) = math::subb(m, self.d, !self.df);
+                    self.d = d;
+                    self.df = !borrow;
+                }
+                AluOp::Sm => {
+                    let m = pins.get_bus();
+                    let (d, borrow) = math::sub(self.d, m);
+                    self.d = d;
+                    self.df = !borrow;
+                }
+                AluOp::Smb => {
+                    let m = pins.get_bus();
+                    let (d, borrow) = math::subb(self.d, m, !self.df);
+                    self.d = d;
+                    self.df = !borrow;
+                }
+            },
+            MicroOp::Test { bit, inv } => {
+                self.br = match bit {
+                    Bit::True => true,
+                    Bit::Q => self.out.get_q(),
+                    Bit::DZ => self.d == 0,
+                    Bit::DF => self.df,
+                    Bit::IE => self.ie,
+                    Bit::NEF1 => !pins.get_ef1(),
+                    Bit::NEF2 => !pins.get_ef2(),
+                    Bit::NEF3 => !pins.get_ef3(),
+                    Bit::NEF4 => !pins.get_ef4(),
+                };
+                if inv {
+                    self.br = !self.br;
+                }
+            }
+            MicroOp::Br => {
+                if self.br {
+                    let m = pins.get_bus();
+                    self.plo(self.p, m);
+                } else {
+                    self.inc(self.p);
+                }
+            }
+            MicroOp::LbrLatch => {
+                // Store the high byte in a temporary register, so that we can use
+                // r[p] to fetch the low byte in the subsequent machine cycle.
+                self.b = pins.get_bus();
+                self.inc(self.p);
+            }
+            MicroOp::Lbr => {
+                if self.br {
+                    let m = pins.get_bus();
+                    self.plo(self.p, m);
+                    self.phi(self.p, self.b);
+                } else {
+                    self.inc(self.p);
+                }
+            }
+            MicroOp::Ls => {
+                if self.br {
+                    self.inc(self.p);
+                }
+            }
+            MicroOp::Mark => {
+                self.t = (self.x << 4) | (self.p & 0xf);
+                self.out.set_bus(self.t);
+                self.x = self.p;
+                self.dec(2);
+            }
+            MicroOp::Ret { ie } => {
+                let m = pins.get_bus();
+                self.x = m >> 4;
+                self.p = m & 0xf;
+                self.inc(self.x);
+                self.ie = ie;
+            }
         }
     }
 
@@ -605,217 +599,5 @@ impl Cdp1802 {
     fn inc(&mut self, n: u8) {
         let r = &mut self.r[n as usize];
         *r = (*r).overflowing_add(1).0;
-    }
-
-    fn tick_mrd(&mut self, tick: u8, n: u8) {
-        match tick {
-            0 => self.out.set_ma(self.ghi(n)),
-            2 => {
-                self.out.set_mrd(false);
-                self.out.set_ma(self.glo(n));
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn tick_store(&mut self, tick: u8, n: u8, value: u8) {
-        match tick {
-            0 => self.out.set_ma(self.ghi(n)),
-            2 => self.out.set_ma(self.glo(n)),
-            3 => self.out.set_bus(value),
-            5 => self.out.set_mwr(false),
-            _ => (),
-        }
-    }
-
-    fn tick_mark(&mut self, tick: u8) {
-        match tick {
-            0 => self.out.set_ma(self.ghi(2)),
-            2 => self.out.set_ma(self.glo(2)),
-            3 => {
-                self.t = (self.x << 4) | (self.p & 0xf);
-                self.out.set_bus(self.t);
-                self.x = self.p;
-                self.dec(2);
-            }
-            5 => self.out.set_mwr(false),
-            _ => (),
-        }
-    }
-
-    fn tick_ret(&mut self, pins: Cdp1802Pins, tick: u8, ie: bool) {
-        match tick {
-            t @ (0 | 2) => self.tick_mrd(t, self.x),
-            3 => {
-                let m = pins.get_bus();
-                self.x = m >> 4;
-                self.p = m & 0xf;
-                self.inc(self.x);
-                self.ie = ie;
-            }
-            _ => (),
-        }
-    }
-
-    fn tick_add(&mut self, pins: Cdp1802Pins, tick: u8, n: u8, carry: bool) {
-        match tick {
-            t @ (0 | 2) => self.tick_mrd(t, n),
-            3 => {
-                let m = pins.get_bus();
-                if carry {
-                    (self.d, self.df) = math::addc(self.d, m, self.df);
-                } else {
-                    (self.d, self.df) = math::add(self.d, m);
-                }
-            }
-            _ => (),
-        }
-    }
-
-    fn tick_subd(&mut self, pins: Cdp1802Pins, tick: u8, n: u8, borrow: bool) {
-        match tick {
-            t @ (0 | 2) => self.tick_mrd(t, n),
-            3 => {
-                let m = pins.get_bus();
-                if borrow {
-                    (self.d, self.df) = math::subc(m, self.d, !self.df);
-                } else {
-                    (self.d, self.df) = math::sub(m, self.d);
-                }
-            }
-            _ => (),
-        }
-    }
-
-    fn tick_subm(&mut self, pins: Cdp1802Pins, tick: u8, n: u8, borrow: bool) {
-        match tick {
-            t @ (0 | 2) => self.tick_mrd(t, n),
-            3 => {
-                let m = pins.get_bus();
-                if borrow {
-                    (self.d, self.df) = math::subc(self.d, m, !self.df);
-                } else {
-                    (self.d, self.df) = math::sub(self.d, m);
-                }
-            }
-            _ => (),
-        }
-    }
-
-    fn tick_bxx(&mut self, pins: Cdp1802Pins, tick: u8, n: u8) {
-        match tick {
-            t @ (0 | 2) => self.tick_mrd(t, self.p),
-            1 => {
-                let br = match n & 7 {
-                    0x0 => true,
-                    0x1 => self.out.get_q(),
-                    0x2 => self.d == 0,
-                    0x3 => self.df,
-                    0x4 => !pins.get_ef1(),
-                    0x5 => !pins.get_ef2(),
-                    0x6 => !pins.get_ef3(),
-                    0x7 => !pins.get_ef4(),
-                    _ => unreachable!(),
-                };
-                self.b = if (n & 8) > 0 { !br } else { br } as u8;
-            }
-            3 => {
-                if self.b != 0 {
-                    let m = pins.get_bus();
-                    self.plo(self.p, m);
-                } else {
-                    self.inc(self.p);
-                }
-            }
-            _ => (),
-        }
-    }
-
-    fn tick_lbxx(&mut self, pins: Cdp1802Pins, tick: u8, n: u8) {
-        match tick {
-            t @ (0 | 2) => self.tick_mrd(t, self.p),
-            1 => {
-                self.br = match n {
-                    0x0 => true,
-                    0x1 => self.out.get_q(),
-                    0x2 => self.d == 0,
-                    0x3 => self.df,
-                    0x8 => false,
-                    0x9 => !self.out.get_q(),
-                    0xa => self.d != 0,
-                    0xb => !self.df,
-                    _ => unreachable!("lbxx: {n}"),
-                }
-            }
-            3 => {
-                if self.br {
-                    // Store the high byte in a temporary register, so that we can use
-                    // r[p] to fetch the low byte in the subsequent machine cycle.
-                    self.b = pins.get_bus();
-                }
-                self.inc(self.p);
-            }
-            t @ (8 | 10) => self.tick_mrd(t & 7, self.p),
-            11 => {
-                if self.br {
-                    let m = pins.get_bus();
-                    self.plo(self.p, m);
-                    self.phi(self.p, self.b);
-                } else {
-                    self.inc(self.p);
-                }
-            }
-            _ => (),
-        }
-    }
-
-    fn tick_lsxx(&mut self, tick: u8, n: u8) {
-        match tick {
-            1 => {
-                self.br = match n {
-                    0x4 => false,
-                    0x5 => !self.out.get_q(),
-                    0x6 => self.d != 0,
-                    0x7 => !self.df,
-                    0xc => self.ie,
-                    0xd => self.out.get_q(),
-                    0xe => self.d == 0,
-                    0xf => self.df,
-                    _ => unreachable!("lsxx: {n}"),
-                };
-            }
-            3 | 11 if self.br => self.inc(self.p),
-            _ => (),
-        }
-    }
-
-    fn tick_output(&mut self, tick: u8, n: u8) {
-        match tick {
-            0 => {
-                self.out.set_n(n);
-                self.out.set_ma(self.ghi(self.x));
-            }
-            2 => {
-                self.out.set_mrd(false);
-                self.out.set_ma(self.glo(self.x));
-            }
-            3 => self.inc(self.x),
-            7 => self.out.set_n(0),
-            _ => (),
-        }
-    }
-
-    fn tick_input(&mut self, pins: Cdp1802Pins, tick: u8, n: u8) {
-        match tick {
-            0 => {
-                self.out.set_n(n);
-                self.out.set_ma(self.ghi(self.x));
-            }
-            2 => self.out.set_ma(self.glo(self.x)),
-            5 => self.out.set_mwr(false),
-            6 => self.d = pins.get_bus(),
-            7 => self.out.set_n(0),
-            _ => (),
-        }
     }
 }

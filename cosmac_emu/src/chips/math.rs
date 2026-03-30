@@ -2,26 +2,27 @@ pub fn add(x: u8, y: u8) -> (u8, bool) {
     x.overflowing_add(y)
 }
 
-pub fn addc(x: u8, y: u8, df: bool) -> (u8, bool) {
-    let (acc, df1) = add(x, y);
-    let (acc, df2) = add(acc, df.into());
-    (acc, df1 || df2)
+// add with carry
+pub fn addc(x: u8, y: u8, c: bool) -> (u8, bool) {
+    let (acc, c1) = add(x, y);
+    let (acc, c2) = add(acc, c.into());
+    (acc, c1 || c2)
 }
 
 pub fn sub(x: u8, y: u8) -> (u8, bool) {
-    let (z, overflow) = x.overflowing_sub(y);
-    (z, !overflow)
+    x.overflowing_sub(y)
 }
 
-pub fn subc(x: u8, y: u8, df: bool) -> (u8, bool) {
-    let (acc, df1) = sub(x, y);
-    let (acc, df2) = sub(acc, df.into());
-    (acc, df1 && df2)
+// subtract with borrow
+pub fn subb(x: u8, y: u8, b: bool) -> (u8, bool) {
+    let (acc, b1) = sub(x, y);
+    let (acc, b2) = sub(acc, b.into());
+    (acc, b1 || b2)
 }
 
 #[cfg(test)]
 mod test {
-    use super::{add, addc, sub, subc};
+    use super::{add, addc, sub, subb};
 
     #[test]
     fn test_add() {
@@ -47,21 +48,21 @@ mod test {
 
     #[test]
     fn test_sub() {
-        assert_eq!(sub(0, 0), (0, true));
-        assert_eq!(sub(0, 1), (0xff, false));
-        assert_eq!(sub(1, 0), (1, true));
-        assert_eq!(sub(0xff, 1), (0xfe, true));
-        assert_eq!(sub(1, 0xff), (2, false));
+        assert_eq!(sub(0, 0), (0, false));
+        assert_eq!(sub(0, 1), (0xff, true));
+        assert_eq!(sub(1, 0), (1, false));
+        assert_eq!(sub(0xff, 1), (0xfe, false));
+        assert_eq!(sub(1, 0xff), (2, true));
     }
 
     #[test]
     fn test_subc() {
-        assert_eq!(subc(0, 0, false), (0, true));
-        assert_eq!(subc(1, 1, false), (0, true));
-        assert_eq!(subc(1, 0, true), (0, true));
-        assert_eq!(subc(1, 1, true), (0xff, false));
-        assert_eq!(subc(0, 0, true), (0xff, false));
-        assert_eq!(subc(0, 1, false), (0xff, false));
-        assert_eq!(subc(0, 1, true), (0xfe, false));
+        assert_eq!(subb(0, 0, false), (0, false));
+        assert_eq!(subb(1, 1, false), (0, false));
+        assert_eq!(subb(1, 0, true), (0, false));
+        assert_eq!(subb(1, 1, true), (0xff, true));
+        assert_eq!(subb(0, 0, true), (0xff, true));
+        assert_eq!(subb(0, 1, false), (0xff, true));
+        assert_eq!(subb(0, 1, true), (0xfe, true));
     }
 }

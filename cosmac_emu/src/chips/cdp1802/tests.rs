@@ -77,8 +77,7 @@ fn test_reset_to_run() {
     sys.pins.set_clear(false);
     sys.tick();
     assert_matches!(sys.cpu.state, State::Init(0));
-    assert_eq!(sys.cpu.i, 0);
-    assert_eq!(sys.cpu.n, 0);
+    assert_eq!(sys.cpu.instr, 0);
     assert!(sys.cpu.ie);
     assert!(!sys.pins.get_q());
     assert_eq!(sys.pins.get_bus(), 0x00);

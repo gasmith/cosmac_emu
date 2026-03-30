@@ -17,7 +17,6 @@ impl RegisterWidget {
     pub fn as_text(chip: &Cdp1802) -> Text<'_> {
         let mut lines = Vec::new();
 
-        let instr = chip.i << 4 | chip.n;
         lines.push(Line::from(format!(
             " d={d:02x}.{df} p={p:x} x={x:x} t={t:04x} in={instr:02x}",
             d = chip.d,
@@ -25,6 +24,7 @@ impl RegisterWidget {
             p = chip.p,
             x = chip.x,
             t = chip.t,
+            instr = chip.instr,
         )));
 
         let mut row = String::new();
